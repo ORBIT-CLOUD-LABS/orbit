@@ -14,7 +14,7 @@
 | CDN | 차량에 파일 배포. 캐시 미스면 Origin에서 가져옴 |
 | 차량 | 등록, 주기적 체크인, 다운로드·검증·설치, 결과 보고 |
 | 프론트엔드 | 대시보드 (스냅샷 + SSE) |
-| DB (MySQL) | `artifact`, `campaign`, `campaign_target(_hw_version, _region)`, `vehicle`, `vehicle_credential`, `vehicle_state` |
+| DB (MySQL) | `artifact`, `campaign`, `campaign_target_hw_version`, `campaign_target_region`, `vehicle`, `vehicle_credential`, `vehicle_state`, `update_result` |
 
 ![alt text](<flow.png>)
 
@@ -46,10 +46,12 @@
 1. `artifactId`의 파일이 있는지 확인 → 없으면 `404 ARTIFACT_NOT_FOUND`.
 2. `targetVersion == artifact.version`, `startAt < endAt` 확인 → 아니면 `400 INVALID_REQUEST`.
 3. 같은 대상 조건 + 목표 버전의 활성 캠페인이 있으면 `409 ACTIVE_CAMPAIGN_EXISTS` (여러 테이블에 걸친 조건이라 앱에서 검사).
-4. `campaign`, `campaign_target`, `campaign_target_hw_version`, `campaign_target_region`에 저장.
+4. `campaign`, `campaign_target_hw_version`, `campaign_target_region`에 저장.
 5. 등록 즉시 `ACTIVE` → 바로 체크인 대상 판정에 반영된다.
 
+- 1:1 조건(`model`, `currentVersionMin`, `currentVersionMax`)은 `campaign`에, 1:N 조건(`hwVersions`, `regions`)은 별도 테이블에 저장한다.
 - `hwVersions`, `regions`가 비어 있으면(행 없음) 전체가 대상.
+- 목표 버전은 `artifact.version`과 같으므로 `campaign`에 따로 저장하지 않는다.
 
 ### ③ 차량 등록 · 토큰 발급 (차량)
 
@@ -58,27 +60,30 @@
 요청: `vehicleId`, `model`, `hwVersion`, `region`, `currentVersion`
 
 1. 공통 등록 키(`ENROLLMENT_KEY`) 확인 → 틀리면 `401 INVALID_ENROLLMENT_KEY` (차량은 시작 실패로 종료).
-2. `vehicle`을 만들거나 갱신한다. 처음이면 `201`, 재등록이면 `200`.
-3. 기존 토큰을 폐기(`revoked_at`)하고 새 토큰을 발급한다. 차량 하나에 유효 토큰은 하나.
-4. 토큰은 SHA-256 해시로만 `vehicle_credential`에 저장한다. 원문은 이 응답에서 한 번만 내려준다.
+2. `vehicle`(`model`, `hw_version`, `region`)을 만들거나 갱신한다. 처음이면 `201`, 재등록이면 `200`.
+3. `vehicle_state`의 `current_version`을 `currentVersion`으로 만들거나 갱신한다.
+4. 기존 토큰을 폐기(`status = 'REVOKED'`, `revoked_at`)하고 새 토큰을 발급한다. 차량 하나에 유효 토큰은 하나.
+5. 토큰은 SHA-256 해시로만 `vehicle_credential`에 저장한다. 원문은 이 응답에서 한 번만 내려준다.
 
 - 차량은 토큰을 메모리에만 둔다. 재시작하거나 체크인에서 `401`을 받으면 다시 등록한다.
+- 차종·HW·지역은 등록 때만 받는다. 바뀌면 재등록으로 반영한다.
 - 등록 키로 다른 API를 부르면 `401`.
 
 ### ④ 체크인 · 대상 판정 · 결과 보고 (차량, 주기적)
 
 `POST /api/v1/vehicles/{vehicleId}/check-in` · `Bearer {vehicle-token}` · VEHICLE-REQ-001, UPDATE-REQ-001 / VEHICLE-POL-001, VEHICLE-POL-002, UPDATE-POL-001
 
-요청: `model`, `hwVersion`, `region`, `currentVersion`, `lastUpdate{campaignId, result, failureReason, failureDetail, finishedAt}` (없으면 null)
+요청: `currentVersion`, `lastUpdate{campaignId, result, failureReason, failureDetail, finishedAt}` (없으면 null)
 
 서버 처리
-1. `vehicle_state`의 최신 상태를 덮어쓴다 (`last_seen_at` = DB `NOW(3)`).
-2. `lastUpdate`가 있으면 결과를 기록하고 현재 버전을 갱신한다. 같은 결과가 두 번 와도 결과는 같다(멱등).
-3. 대상 여부를 판정해 응답한다.
+1. 경로의 `vehicleId`(= `vehicle.external_id`)로 `vehicle`을 조회해 `model`, `hw_version`, `region`을 가져온다. `vehicle`에는 쓰지 않는다.
+2. `vehicle_state`의 `current_version`, `last_seen_at`(= DB `NOW(3)`)을 덮어쓴다.
+3. `lastUpdate`가 있으면 `update_result`에 기록한다. `(vehicle_id, campaign_id)` 기준으로 덮어쓰므로 같은 결과가 두 번 와도 결과는 같다(멱등).
+4. 대상 여부를 판정해 응답한다.
 
 판정 규칙
-- 활성 캠페인의 조건(차종, HW, 지역, 현재 버전 범위, 적용 기간)에 **모두** 맞으면 대상.
-- `currentVersion`이 이미 `targetVersion`이면 대상 아님.
+- `vehicle`의 차종·HW·지역과 요청의 `currentVersion`이 활성 캠페인의 조건(차종, HW, 지역, 현재 버전 범위, 적용 기간)에 **모두** 맞으면 대상.
+- `currentVersion`이 이미 목표 버전(`artifact.version`)이면 대상 아님.
 - 활성 캠페인이 없으면 대상 아님.
 - 버전은 문자열이라 SQL 범위 비교가 틀린다(`'1.0.10' < '1.0.9'`). 활성 캠페인을 `model`로 좁혀 가져온 뒤 앱에서 비교한다.
 
@@ -154,6 +159,8 @@
 - `asOf` + 전체 `vehicles[]` 스냅샷.
 
 공통 차량 필드: `vehicleId`, `model`, `currentVersion`, `campaignId`, `lastResult`, `failureReason`, `lastSeenAt`(온라인/오프라인 판단), `updatedAt`
+- `vehicleId`, `model`은 `vehicle`, `currentVersion`, `lastSeenAt`, `updatedAt`은 `vehicle_state`, `campaignId`, `lastResult`, `failureReason`은 차량의 최근 `update_result`에서 가져온다.
+- 결과 보고는 체크인과 같이 오므로 `vehicle_state.updated_at`도 함께 바뀌어 SSE 변경분에 잡힌다.
 
 - 같은 차량이 스냅샷과 SSE에 모두 오면 `updatedAt`이 더 늦은 쪽을 쓴다.
 - SSE가 다시 연결되면 스냅샷을 다시 받는다.
@@ -181,22 +188,24 @@ stateDiagram-v2
 
 ## 4. 데이터 흐름 (테이블 기준)
 
-FK 생성 순서: `artifact → campaign → campaign_target(+hw_version, region) → vehicle → vehicle_credential → vehicle_state`
+FK 생성 순서: `artifact → campaign → campaign_target_hw_version, campaign_target_region → vehicle → vehicle_credential, vehicle_state → update_result`
 
 | 단계 | 쓰기 | 읽기 |
 |---|---|---|
 | ① Origin 파일 등록 | `artifact` | - |
-| ② 캠페인 등록 | `campaign`, `campaign_target`, `campaign_target_hw_version`, `campaign_target_region` | `artifact`, 활성 `campaign` |
-| ③ 차량 등록 | `vehicle`, `vehicle_credential` (기존 행 `revoked_at`, 새 행 추가) | `vehicle_credential` |
-| ④ 체크인 | `vehicle`, `vehicle_state` | `vehicle_credential`, 활성 `campaign` + `campaign_target*` |
-| ⑤ 매니페스트 | - | `campaign`, `campaign_target*`, `artifact`, `vehicle_state` |
-| ⑧ 대시보드 | - | `vehicle`, `vehicle_state` (`idx_vehicle_state_updated_at`) |
+| ② 캠페인 등록 | `campaign`, `campaign_target_hw_version`, `campaign_target_region` | `artifact`, 활성 `campaign` |
+| ③ 차량 등록 | `vehicle`, `vehicle_state`, `vehicle_credential` (기존 행 `REVOKED`, 새 행 추가) | `vehicle_credential` |
+| ④ 체크인 | `vehicle_state`, `update_result` (`lastUpdate`가 있을 때) | `vehicle_credential`, `vehicle`, 활성 `campaign` + `campaign_target_*` + `artifact` |
+| ⑤ 매니페스트 | - | `campaign`, `campaign_target_*`, `artifact`, `vehicle`, `vehicle_state` |
+| ⑧ 대시보드 | - | `vehicle`, `vehicle_state` (`idx_vehicle_state_updated_at`), `update_result` |
 
 주요 제약
-- `artifact`: `UNIQUE(model, version)`, `UNIQUE(path)`, `updated_at` 없음(불변).
-- `campaign`: `status` = `ACTIVE / INACTIVE`, `CHECK (start_at < end_at)`.
-- `vehicle_credential`: 생성 컬럼 `active_vehicle_id`에 UNIQUE → 차량당 유효 토큰 1개.
+- `artifact`: `UNIQUE(model, version)`, `UNIQUE(path)`, `sha256` 소문자 hex 64자, `size_bytes > 0`, `updated_at` 없음(불변).
+- `campaign`: `status` = `ACTIVE / INACTIVE`, `CHECK (start_at < end_at)`, 체크인 판정용 `idx_campaign_status_model`.
+- `vehicle`: 등록 때만 갱신. `external_id`(차량이 보내는 `vehicleId`)에 UNIQUE.
+- `vehicle_credential`: `status` = `ACTIVE / REVOKED`, `REVOKED`일 때만 `revoked_at`. 생성 컬럼 `active_vehicle_id`, `active_token_hash`에 UNIQUE → 차량당 유효 토큰 1개, 유효 토큰 해시 중복 없음.
 - `vehicle_state`: 체크인마다 덮어씀. 대시보드 스냅샷과 SSE의 출처.
+- `update_result`: `UNIQUE(vehicle_id, campaign_id)`로 덮어써 멱등 처리. `result` = `SUCCEEDED / FAILED`, `FAILED`일 때만 `failure_reason`.
 
 ## 5. 인증 정리
 
@@ -215,7 +224,7 @@ FK 생성 순서: `artifact → campaign → campaign_target(+hw_version, region
 | 캠페인 목록 | `GET /api/v1/admin/campaigns` | 상태·차종 필터 |
 | 캠페인 상세 | `GET /api/v1/admin/campaigns/{campaignId}` | 대상 조건·기간·상태 |
 | 캠페인 비활성화 | `PATCH /api/v1/admin/campaigns/{campaignId}` | ACTIVE → INACTIVE, 배포 중지 |
-| 캠페인 진행 현황 | `GET /api/v1/admin/campaigns/{campaignId}/stats` | 대상·진행·성공·실패(사유별) 집계 |
+| 캠페인 진행 현황 | `GET /api/v1/admin/campaigns/{campaignId}/stats` | 대상·진행·성공·실패(사유별) 집계 (`update_result`, `idx_update_result_campaign_result`) |
 | Origin 파일 상세 | `GET /api/v1/admin/artifacts/{artifactId}` | 해시·서명·경로 |
 | 차량 상세 | `GET /api/v1/dashboard/vehicles/{vehicleId}` | 상세 + 마지막 업데이트 결과 |
 | 차량 업데이트 이력 | `GET /api/v1/dashboard/vehicles/{vehicleId}/events` | `vehicle_event` 테이블 필요 |
