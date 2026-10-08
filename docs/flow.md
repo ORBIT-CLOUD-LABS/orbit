@@ -26,9 +26,10 @@
 
 1. 관리자가 `file`, `model`, `version`, (선택) `sha256`을 올린다.
 2. OTA 서버가 SHA-256을 계산한다. 요청에 `sha256`이 있으면 비교한다 → 다르면 `422 HASH_MISMATCH`.
-3. 해시에 Ed25519 서명을 만든다.
-4. Origin File Server에 업로드한다 → 실패하면 `502 ORIGIN_UPLOAD_FAILED` (재시도).
-5. `artifact` 테이블에 저장하고 `201`로 `artifactId`, `fileSize`, `sha256`, `signature`, `path`를 돌려준다.
+3. Origin File Server에 업로드한다 → 실패하면 `502 ORIGIN_UPLOAD_FAILED` (재시도).
+4. `artifact` 테이블에 저장하고 `201`로 `artifactId`, `fileSize`, `sha256`, `path`를 돌려준다.
+
+- Phase1에서는 Ed25519 서명을 만들지 않는다. Phase2에서 다룬다 (§7 참고).
 
 규칙
 - 같은 `model + version`이 있으면 `409 ARTIFACT_VERSION_EXISTS`.
@@ -104,7 +105,6 @@
 |---|---|
 | `DOWNLOAD_FAILED` | CDN 오류, 연결 끊김, 크기 불일치, 재시도 초과 |
 | `HASH_MISMATCH` | SHA-256 불일치 |
-| `SIGNATURE_INVALID` | Ed25519 서명 검증 실패 |
 | `INSTALL_FAILED` | 설치 중 실패 |
 
 ### ⑤ 매니페스트 요청 (차량, 대상일 때)
@@ -112,7 +112,7 @@
 `GET /api/v1/vehicles/{vehicleId}/campaigns/{campaignId}/manifest` · `Bearer {vehicle-token}` · MANIFEST-REQ-001 / MANIFEST-POL-001
 
 1. 서버는 요청 시점에 대상 여부를 **다시** 확인한다.
-2. 응답: `campaignId`, `targetVersion`, `fileSize`, `sha256`, `signature`, `downloadUrl`(CDN 서명 URL), `urlExpiresAt`.
+2. 응답: `campaignId`, `targetVersion`, `fileSize`, `sha256`, `downloadUrl`(CDN 서명 URL), `urlExpiresAt`.
 
 | HTTP | code | 상황 |
 |---|---|---|
@@ -141,9 +141,10 @@
 
 1. 받은 크기 == `fileSize`
 2. SHA-256 == `sha256`
-3. `signature`를 차량에 내장된 공개키(Ed25519)로 검증
-4. 하나라도 실패하면 재시도하거나 매니페스트를 다시 요청. 계속 실패하면 업데이트 실패.
-5. 설치 → 성공/실패를 다음 체크인의 `lastUpdate`로 보고 (④로 돌아감).
+3. 하나라도 실패하면 재시도하거나 매니페스트를 다시 요청. 계속 실패하면 업데이트 실패.
+4. 설치 → 성공/실패를 다음 체크인의 `lastUpdate`로 보고 (④로 돌아감).
+
+- Phase1에서는 서명 검증을 하지 않는다. 출처 검증(Ed25519 서명)은 Phase2에서 다룬다 (§7 참고).
 
 ### ⑧ 대시보드 (프론트엔드)
 
@@ -180,8 +181,8 @@ stateDiagram-v2
     다운로드 --> 매니페스트: 403 / 410 (URL 문제)
     다운로드 --> 검증: 200
     다운로드 --> 결과보고대기: 404 / 재시도 초과 (DOWNLOAD_FAILED)
-    검증 --> 설치: 크기·해시·서명 OK
-    검증 --> 결과보고대기: HASH_MISMATCH / SIGNATURE_INVALID
+    검증 --> 설치: 크기·해시 OK
+    검증 --> 결과보고대기: HASH_MISMATCH
     설치 --> 결과보고대기: SUCCEEDED / INSTALL_FAILED
     결과보고대기 --> 체크인: 다음 체크인에 lastUpdate 포함
 ```
@@ -225,7 +226,7 @@ FK 생성 순서: `artifact → campaign → campaign_target_hw_version, campaig
 | 캠페인 상세 | `GET /api/v1/admin/campaigns/{campaignId}` | 대상 조건·기간·상태 |
 | 캠페인 비활성화 | `PATCH /api/v1/admin/campaigns/{campaignId}` | ACTIVE → INACTIVE, 배포 중지 |
 | 캠페인 진행 현황 | `GET /api/v1/admin/campaigns/{campaignId}/stats` | 대상·진행·성공·실패(사유별) 집계 (`update_result`, `idx_update_result_campaign_result`) |
-| Origin 파일 상세 | `GET /api/v1/admin/artifacts/{artifactId}` | 해시·서명·경로 |
+| Origin 파일 상세 | `GET /api/v1/admin/artifacts/{artifactId}` | 해시·경로 |
 | 차량 상세 | `GET /api/v1/dashboard/vehicles/{vehicleId}` | 상세 + 마지막 업데이트 결과 |
 | 차량 업데이트 이력 | `GET /api/v1/dashboard/vehicles/{vehicleId}/events` | `vehicle_event` 테이블 필요 |
 | 헬스체크 | `GET /actuator/health` | k8s liveness/readiness |
@@ -239,3 +240,10 @@ FK 생성 순서: `artifact → campaign → campaign_target_hw_version, campaig
 - SSE keep-alive 간격 (현재 15초 안)
 - 캠페인 비활성화·수정 API 필요 여부
 - Origin 파일 목록 페이지네이션 필요 여부
+
+### Phase2에서 다룰 항목
+
+- 업데이트 파일 서명(Ed25519)
+  - Phase1에서는 SHA-256 해시로 무결성만 확인하고, 파일 출처(서명)는 검증하지 않는다.
+  - Phase2에서 추가할 것: 파일 등록 시 서명 생성(①), `artifact.signature` 컬럼, 매니페스트 `signature` 필드(⑤), 차량 내장 공개키로 검증(⑦), 실패 사유 `SIGNATURE_INVALID`.
+  - 서명 키 보관·교체 방법도 함께 정한다.
