@@ -45,7 +45,7 @@
 요청: `name`, `artifactId`, `targetVersion`, `target{model, hwVersions[], regions[], currentVersionMin, currentVersionMax}`, `startAt`, `endAt`
 
 1. `artifactId`의 파일이 있는지 확인 → 없으면 `404 ARTIFACT_NOT_FOUND`.
-2. `targetVersion == artifact.version`, `startAt < endAt` 확인 → 아니면 `400 INVALID_REQUEST`.
+2. `target.model == artifact.model`, `targetVersion == artifact.version`, `startAt < endAt` 확인 → 아니면 `400 INVALID_INPUT`.
 3. 같은 대상 조건 + 목표 버전의 활성 캠페인이 있으면 `409 ACTIVE_CAMPAIGN_EXISTS` (여러 테이블에 걸친 조건이라 앱에서 검사).
 4. `campaign`, `campaign_target_hw_version`, `campaign_target_region`에 저장.
 5. 등록 즉시 `ACTIVE` → 바로 체크인 대상 판정에 반영된다.

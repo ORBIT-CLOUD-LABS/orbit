@@ -3,6 +3,7 @@
 - 근거: [flow.md](flow.md), Notion `API 설계` 데이터베이스
 - 상태: 모든 API `설계중` (v1)
 - 작성일: 2026-10-10
+- 수정일: 2026-10-12
 - 구현 추적: [orbit-server#25](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/25)
 
 orbit-server가 구현할 API를 한 곳에 모은 목록이다. 요청·응답 필드와 처리 순서는 flow.md의 각 단계를 따른다.
@@ -42,7 +43,7 @@ API는 아니지만 위 API가 의존하므로 따로 구현한다.
 |---|---|---|
 | Origin 파일 등록 | `409 ARTIFACT_VERSION_EXISTS`, `422 HASH_MISMATCH`, `502 ORIGIN_UPLOAD_FAILED` | ORIGIN-REQ-001 / ORIGIN-POL-001 |
 | Origin 파일 목록 | - | ORIGIN-REQ-001 |
-| 캠페인 등록 | `400 INVALID_REQUEST`, `404 ARTIFACT_NOT_FOUND`, `409 ACTIVE_CAMPAIGN_EXISTS` | CAMPAIGN-REQ-001 / CAMPAIGN-POL-001 |
+| 캠페인 등록 | `400 INVALID_INPUT`, `404 ARTIFACT_NOT_FOUND`, `409 ACTIVE_CAMPAIGN_EXISTS` | CAMPAIGN-REQ-001 / CAMPAIGN-POL-001 |
 | 차량 등록 · 토큰 발급 | `401 INVALID_ENROLLMENT_KEY` | VEHICLE-REQ-002 / VEHICLE-POL-003 |
 | 체크인 · 대상 판정 · 결과 보고 | `401 UNAUTHORIZED`, `403 VEHICLE_MISMATCH` | VEHICLE-REQ-001, UPDATE-REQ-001 / VEHICLE-POL-001, VEHICLE-POL-002, UPDATE-POL-001 |
 | 매니페스트 요청 | `404 CAMPAIGN_NOT_FOUND`, `409 NOT_UPDATE_TARGET`, `410 CAMPAIGN_INACTIVE` | MANIFEST-REQ-001 / MANIFEST-POL-001, DOWNLOAD-REQ-001 / DOWNLOAD-POL-001 |
