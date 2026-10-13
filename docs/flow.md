@@ -112,19 +112,28 @@
 `GET /api/v1/vehicles/{vehicleId}/campaigns/{campaignId}/manifest` · `Bearer {vehicle-token}` · MANIFEST-REQ-001 / MANIFEST-POL-001
 
 1. 서버는 요청 시점에 대상 여부를 **다시** 확인한다.
-2. 응답: `campaignId`, `targetVersion`, `fileSize`, `sha256`, `downloadUrl`(CDN 서명 URL), `urlExpiresAt`.
+   - 요청한 캠페인이 이 차량의 대상인지만 본다. 차량의 차종·HW·지역과 마지막 체크인 때의 `currentVersion`(`vehicle_state`)으로 체크인과 같은 규칙을 적용한다.
+   - 체크인 이후 더 높은 버전의 캠페인이 등록됐더라도 요청한 캠페인으로 발급한다. 새 캠페인은 다음 체크인에서 반영된다.
+2. 응답: `campaignId`, `targetVersion`, `fileSize`, `sha256`, `downloadUrl`(CDN URL).
+   - Phase1: `downloadUrl`은 파일마다 고정된 CDN URL(`{CDN 주소}/firmware/{model}/{version}/firmware.bin`)이고, `urlExpiresAt`은 응답하지 않는다.
+   - Phase2: 서명 URL(`md5`, `expires`)과 `urlExpiresAt`을 응답한다 (§7 참고).
 
 | HTTP | code | 상황 |
 |---|---|---|
 | 404 | `CAMPAIGN_NOT_FOUND` | 캠페인 없음 |
-| 409 | `NOT_UPDATE_TARGET` | 대상 아님 (이미 목표 버전 포함) |
-| 410 | `CAMPAIGN_INACTIVE` | 비활성 또는 기간 종료 |
+| 409 | `NOT_UPDATE_TARGET` | 대상 아님 (조건 불일치, 이미 목표 버전 포함) |
+| 410 | `CAMPAIGN_INACTIVE` | 비활성 또는 적용 기간 밖 (시작 전·종료) |
 
-- URL이 만료되면 이 API를 다시 호출해 새 URL을 받는다.
+- 판정 순서: 404 → 410 → 409.
+- (Phase2) URL이 만료되면 이 API를 다시 호출해 새 URL을 받는다.
 
 ### ⑥ 업데이트 파일 다운로드 (차량 → CDN)
 
-`GET {downloadUrl}` · OTA 서버 API 아님 · 인증 헤더 없이 서명 URL(`md5`, `expires` 쿼리)로 제한 · DOWNLOAD-REQ-001 / DOWNLOAD-POL-001
+`GET {downloadUrl}` · OTA 서버 API 아님 · 인증 헤더 없음 · DOWNLOAD-REQ-001 / DOWNLOAD-POL-001
+
+- CDN은 nginx(`proxy_cache`)로 구성하고, Origin(SeaweedFS) 앞에서 캐시한다.
+- Phase1: 서명 없이 고정 URL로 받는다. 접근은 내부 대역(sol·astra·luna)으로만 제한한다.
+- Phase2: 서명 URL(`md5`, `expires` 쿼리)로 제한한다 (nginx `secure_link`).
 
 - 응답 `application/octet-stream`, 헤더 `X-Cache-Status: HIT | MISS`.
   - HIT: CDN 캐시에서 바로 응답.
@@ -132,9 +141,9 @@
 
 | HTTP | 상황 | 차량 동작 |
 |---|---|---|
-| 403 | 서명(md5) 틀림 | 매니페스트 재요청 |
+| 403 | (Phase2) 서명(md5) 틀림 | 매니페스트 재요청 |
 | 404 | Origin에도 파일 없음 | 실패 처리, 다음 체크인에 `DOWNLOAD_FAILED` |
-| 410 | URL 만료 | 매니페스트 재요청 후 다시 다운로드 |
+| 410 | (Phase2) URL 만료 | 매니페스트 재요청 후 다시 다운로드 |
 | 502, 504 | CDN → Origin 오류 | 재시도 |
 
 ### ⑦ 검증 · 설치 (차량)
@@ -178,7 +187,7 @@ stateDiagram-v2
     체크인 --> 매니페스트: updateTarget=true
     매니페스트 --> 다운로드: downloadUrl
     매니페스트 --> 체크인: 409 / 410 / 404
-    다운로드 --> 매니페스트: 403 / 410 (URL 문제)
+    다운로드 --> 매니페스트: 403 / 410 (Phase2, URL 문제)
     다운로드 --> 검증: 200
     다운로드 --> 결과보고대기: 404 / 재시도 초과 (DOWNLOAD_FAILED)
     검증 --> 설치: 크기·해시 OK
@@ -216,7 +225,7 @@ FK 생성 순서: `artifact → campaign → campaign_target_hw_version, campaig
 | 차량 (그 외) | `Bearer {vehicle-token}`, 토큰 차량 ≠ 경로 `vehicleId`면 `403` |
 | 관리자 / 프론트엔드 | `Bearer {admin-token}` (발급 방식 협의) |
 | SSE | `EventSource`가 헤더를 못 붙여서 쿠키 또는 쿼리 토큰 (협의) |
-| CDN | 서명 URL (`md5`, `expires`) |
+| CDN | Phase1 없음 (내부 대역 제한), Phase2 서명 URL (`md5`, `expires`) |
 
 ## 6. 제안 상태 API (흐름 보조)
 
@@ -236,7 +245,7 @@ FK 생성 순서: `artifact → campaign → campaign_target_hw_version, campaig
 - 관리자 토큰 발급 방식, SSE 인증 방식(쿠키/쿼리 토큰)
 - 차량 토큰 만료 기간, 등록 키 교체 방법
 - 체크인 주기(`nextCheckInSeconds` 기본값), 롤백 방식
-- CDN URL 유효 기간, 다운로드 재시도 횟수·간격
+- 다운로드 재시도 횟수·간격
 - SSE keep-alive 간격 (현재 15초 안)
 - 캠페인 비활성화·수정 API 필요 여부
 - Origin 파일 목록 페이지네이션 필요 여부
@@ -247,3 +256,7 @@ FK 생성 순서: `artifact → campaign → campaign_target_hw_version, campaig
   - Phase1에서는 SHA-256 해시로 무결성만 확인하고, 파일 출처(서명)는 검증하지 않는다.
   - Phase2에서 추가할 것: 파일 등록 시 서명 생성(①), `artifact.signature` 컬럼, 매니페스트 `signature` 필드(⑤), 차량 내장 공개키로 검증(⑦), 실패 사유 `SIGNATURE_INVALID`.
   - 서명 키 보관·교체 방법도 함께 정한다.
+- CDN 서명 URL ([server#38](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/38))
+  - Phase1에서는 고정 URL을 쓰고, 다운로드 접근은 내부 대역으로만 제한한다.
+  - Phase2에서 추가할 것: nginx `secure_link`로 `md5`·`expires` 검증(⑥ 403/410), 매니페스트 `urlExpiresAt` 필드(⑤), 차량의 403/410 재요청 처리.
+  - 서명 문자열 형식, URL 유효 기간, 서명 비밀 값 보관·교체 방법을 함께 정한다.
