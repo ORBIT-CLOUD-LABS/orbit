@@ -160,9 +160,12 @@
 **SSE를 먼저 연결하고 스냅샷을 받는다.** 반대 순서면 그 사이 변경분을 놓칠 수 있다.
 
 `GET /api/v1/dashboard/vehicles/stream` · MONITORING-REQ-001 / MONITORING-POL-001
-- OTA 서버(각 pod)가 약 1초마다 `vehicle_state`를 `updated_at` 기준으로 변경분 조회(기준 시각 DB `NOW(3)`) → 변경이 있을 때만 `event: vehicles` 전송.
-- `id` = 이번 조회 기준 시각. 재연결 시 브라우저가 `Last-Event-ID`를 붙인다.
-- `: keep-alive` 주석 15초 간격 (협의).
+- 인증은 다른 대시보드 API와 같은 `Bearer {admin-token}`. `EventSource`는 헤더를 못 붙이므로 fetch 기반 SSE(예: `@microsoft/fetch-event-source`)로 연결한다.
+- OTA 서버(각 pod)가 약 1초마다 `vehicle_state`를 `updated_at` 기준으로 변경분 조회(기준 시각 DB `NOW(3)`) → 변경이 있을 때만 `event: vehicles` 전송. 조회는 pod당 한 번이고 결과를 연결된 대시보드 전체에 보낸다.
+- `data` = 변경된 차량 배열. 형식은 스냅샷 `vehicles[]`와 같다.
+- `id` = 이번 조회 기준 시각. 재연결 시 클라이언트가 `Last-Event-ID`를 붙이면, 서버는 그 시각 이후 놓친 변경분을 그 연결에만 한 번 보낸다. 형식이 틀리면 `400 INVALID_INPUT`.
+- `updated_at`은 커밋이 아니라 UPDATE 실행 시각이라, 조회 때 커밋 전이던 체크인이 기준 시각보다 이른 `updated_at`으로 늦게 커밋될 수 있다. 그래서 변경분은 `updated_at > 커서 - 겹침 시간(10초)`으로 겹쳐 조회하고, 겹쳐 다시 잡힌 상태는 서버가 걸러 보내지 않는다. 체크인 트랜잭션은 겹침 시간보다 짧은 타임아웃(3초)을 건다.
+- `: keep-alive` 주석 15초 간격. 조회 주기·keep-alive 간격·겹침 시간은 서버 설정값이다.
 - 체크인마다 `last_seen_at`이 바뀌므로 `updated_at`도 바뀌어 변경분에 잡힌다.
 
 `GET /api/v1/dashboard/vehicles` · MONITORING-REQ-004 / MONITORING-POL-001, MONITORING-POL-003
@@ -224,7 +227,7 @@ FK 생성 순서: `artifact → campaign → campaign_target_hw_version, campaig
 | 차량 (등록) | `Bearer {enrollment-key}` (공통 키) |
 | 차량 (그 외) | `Bearer {vehicle-token}`, 토큰 차량 ≠ 경로 `vehicleId`면 `403` |
 | 관리자 / 프론트엔드 | `Bearer {admin-token}` (발급 방식 협의) |
-| SSE | `EventSource`가 헤더를 못 붙여서 쿠키 또는 쿼리 토큰 (협의) |
+| SSE | `Bearer {admin-token}`. `EventSource`는 헤더를 못 붙이므로 fetch 기반 SSE로 연결 |
 | CDN | Phase1 없음 (내부 대역 제한), Phase2 서명 URL (`md5`, `expires`) |
 
 ## 6. 제안 상태 API (흐름 보조)
@@ -242,11 +245,10 @@ FK 생성 순서: `artifact → campaign → campaign_target_hw_version, campaig
 
 ## 7. 협의 필요 항목
 
-- 관리자 토큰 발급 방식, SSE 인증 방식(쿠키/쿼리 토큰)
+- 관리자 토큰 발급 방식
 - 차량 토큰 만료 기간, 등록 키 교체 방법
 - 체크인 주기(`nextCheckInSeconds` 기본값), 롤백 방식
 - 다운로드 재시도 횟수·간격
-- SSE keep-alive 간격 (현재 15초 안)
 - 캠페인 비활성화·수정 API 필요 여부
 - Origin 파일 목록 페이지네이션 필요 여부
 
