@@ -131,8 +131,8 @@
 
 `GET {downloadUrl}` · OTA 서버 API 아님 · 인증 헤더 없음 · DOWNLOAD-REQ-001 / DOWNLOAD-POL-001
 
-- CDN은 nginx(`proxy_cache`)로 구성하고, Origin(SeaweedFS) 앞에서 캐시한다.
-- Phase1: 서명 없이 고정 URL로 받는다. 접근은 내부 대역(sol·astra·luna)으로만 제한한다.
+- CDN은 Kubernetes 안의 nginx Edge(`proxy_cache`)로 구성하고, Origin(nginx, NFS 원본 읽기 전용) 앞에서 캐시한다. 구성은 [phase1.md](phase1.md) §2.
+- Phase1: 서명 없이 고정 URL로 받는다. 접근은 ASTRA 내부 대역과 부하 발생기로만 제한한다.
 - Phase2: 서명 URL(`md5`, `expires` 쿼리)로 제한한다 (nginx `secure_link`).
 
 - 응답 `application/octet-stream`, 헤더 `X-Cache-Status: HIT | MISS`.
