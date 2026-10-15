@@ -77,7 +77,7 @@ VM·IP·사양은 [infrastructure-plan.md](infrastructure-plan.md).
 | PVC (Origin, 읽기 전용) | `origin-files` | 미확정 | gitops |
 | PVC (서버, 읽기·쓰기) | `origin-files-rw` | 미확정 | gitops |
 | `DB_URL` | `jdbc:mysql://192.168.100.106:3306/vehicle` | 확정 | gitops (서버 ConfigMap) |
-| `DB_USERNAME` | `vehicle_app` (`192.168.100.%` 에서 접속 허용) | 확정 | gitops (서버 ConfigMap) |
+| `DB_USERNAME` | `vehicle_app` (worker `192.168.100.102~104` 에서만 접속 허용, ORBIT-CLOUD-LABS/orbit-infrastructure#44) | 확정 | infrastructure, gitops (서버 ConfigMap) |
 | 서버 메트릭 | `/actuator/prometheus`, `8080` | 미확정 | 서버, 수집기 |
 | 서버 CPU request·limit, HPA 목표 | 사전 측정 후 결정 | 미확정 | gitops |
 | 서버 HPA replica | 최소 2, 최대 4 | 확정 | gitops |
