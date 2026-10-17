@@ -3,7 +3,7 @@
 - 근거: [flow.md](flow.md), Notion `API 설계` 데이터베이스
 - 상태: 모든 API `설계중` (v1)
 - 작성일: 2026-10-10
-- 수정일: 2026-10-13
+- 수정일: 2026-10-14
 - 구현 추적: [orbit-server#25](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/25)
 
 orbit-server가 구현할 API를 한 곳에 모은 목록이다. 요청·응답 필드와 처리 순서는 flow.md의 각 단계를 따른다.
@@ -23,7 +23,7 @@ Phase1 OTA 흐름에 반드시 필요한 API. 표의 순서는 데이터가 생�
 | ④ | 체크인 결과 보고 (`lastUpdate`) | - | 체크인 요청에 포함 | vehicle-token | 200 | [server#13](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/13) |
 | ⑤ | 매니페스트 요청 | GET | `/api/v1/vehicles/{vehicleId}/campaigns/{campaignId}/manifest` | vehicle-token | 200 | [server#14](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/14) |
 | ⑧ | 차량 상태 스냅샷 | GET | `/api/v1/dashboard/vehicles` | admin-token | 200 | [server#16](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/16) |
-| ⑧ | 차량 상태 스트림 (SSE) | GET | `/api/v1/dashboard/vehicles/stream` | 협의 (쿠키 또는 쿼리 토큰) | 200 | [server#17](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/17) |
+| ⑧ | 차량 상태 스트림 (SSE) | GET | `/api/v1/dashboard/vehicles/stream` | admin-token (fetch 기반 SSE) | 200 | [server#17](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/17) |
 
 - ⑥ 업데이트 파일 다운로드(`GET {downloadUrl}`)는 CDN이 처리하며 OTA 서버 API가 아니다. OTA 서버는 ⑤에서 다운로드 URL만 만든다. Phase1은 고정 URL, 서명 URL은 Phase2([server#38](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/38)).
 - 업데이트 결과 보고는 별도 API 없이 체크인의 `lastUpdate`로 받는다.
@@ -48,7 +48,7 @@ API는 아니지만 위 API가 의존하므로 따로 구현한다.
 | 체크인 · 대상 판정 · 결과 보고 | `401 UNAUTHORIZED`, `403 VEHICLE_MISMATCH` | VEHICLE-REQ-001, UPDATE-REQ-001 / VEHICLE-POL-001, VEHICLE-POL-002, UPDATE-POL-001 |
 | 매니페스트 요청 | `404 CAMPAIGN_NOT_FOUND`, `409 NOT_UPDATE_TARGET`, `410 CAMPAIGN_INACTIVE` | MANIFEST-REQ-001 / MANIFEST-POL-001, DOWNLOAD-REQ-001 / DOWNLOAD-POL-001 |
 | 차량 상태 스냅샷 | - | MONITORING-REQ-004 / MONITORING-POL-001, MONITORING-POL-003 |
-| 차량 상태 스트림 (SSE) | - | MONITORING-REQ-001 / MONITORING-POL-001 |
+| 차량 상태 스트림 (SSE) | `400 INVALID_INPUT` (형식이 틀린 `Last-Event-ID`) | MONITORING-REQ-001 / MONITORING-POL-001 |
 
 ## 3. 보조 API (제안)
 
@@ -83,7 +83,6 @@ Notion 쪽 설명도 flow.md에 맞춰 수정해야 한다.
 |---|---|---|
 | CDN 서명 URL 형식, URL 유효 기간, 서명 비밀 값 관리 (Phase2) | 매니페스트 요청 | [server#38](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/38) |
 | 관리자 토큰 발급 방식 | 관리자·대시보드 API | [server#15](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/15) |
-| SSE 인증 방식, keep-alive 간격 | 차량 상태 스트림 | [server#17](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/17) |
 | 캠페인 비활성화·수정 API 필요 여부 | 캠페인 비활성화 | [server#20](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/20) |
 | `vehicle_event` 테이블 설계 | 차량 업데이트 이력 | [server#24](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/24) |
 
