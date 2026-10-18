@@ -60,6 +60,24 @@ run ID 는 `20261017T` 뒤 시각이다 (예: `194408Z` = `20261017T194408Z-serv
 | 설정 비교: 붕괴 사례 | C `183046Z` (request=limit 500m, 삭제 뒤 붕괴), `185946Z` (750m 2Pod 한계) | 스크린샷 |
 | DB 병목 해결 전후 (`T_db` 290 → 700~750 → 약 1,000) | 사전 측정, A `170253Z` | 표 |
 
+### 준비된 스크린샷 (`측정-스크린샷/`)
+
+| 장면 | 파일 |
+| --- | --- |
+| 고정 2개 L=600 (버팀) | [B1-고정2-750m-L600-요청률·P95](<측정-스크린샷/B1-고정2-750m-L600-요청률·P95.jpg>) |
+| 고정 2개 L=650 (못 받음) | [B1-고정2-750m-L650-붕괴-요청률·P95·Hikari](<측정-스크린샷/B1-고정2-750m-L650-붕괴-요청률·P95·Hikari.jpg>) |
+| HPA 2~4 L=650 요청률·P95 | [B2-HPA70-750m-L650-요청률·P95·Hikari](<측정-스크린샷/B2-HPA70-750m-L650-요청률·P95·Hikari.jpg>) |
+| HPA 2~4 scale-out (replica·사용률·CPU) | [B2-HPA70-750m-L650-replica·HPA·CPU](<측정-스크린샷/B2-HPA70-750m-L650-replica·HPA·CPU.jpg>) |
+| 750m Pod 2개 한계 (throttling·Hikari 대기) | [limit750m-2Pod한계-throttling·Hikari대기](<측정-스크린샷/limit750m-2Pod한계-throttling·Hikari대기.jpg>) |
+| Pod 삭제 복구 (limit 1000m) | [C1-limit1000m-pod삭제-replica·CPU](<측정-스크린샷/C1-limit1000m-pod삭제-replica·CPU.jpg>) |
+| Pod 삭제 뒤 붕괴 (request=limit 500m) | [C2-limit500m-pod삭제-붕괴·probe실패](<측정-스크린샷/C2-limit500m-pod삭제-붕괴·probe실패.jpg>), [C2-limit500m-k6-VU·dropped](<측정-스크린샷/C2-limit500m-k6-VU·dropped.jpg>) |
+| 300m 붕괴 원인 로그 (패널 7) | [300m-붕괴-WARN로그](<측정-스크린샷/300m-붕괴-WARN로그.jpg>) |
+| 본 실험 1차 replica·annotation | [본실험1차-HPA2-4-replica·annotation](<측정-스크린샷/본실험1차-HPA2-4-replica·annotation.jpg>) |
+| CDN 캐시 (Edge HIT·전송량·Origin) | [CDN-E1~E3-Edge HIT·전송량·Origin](<측정-스크린샷/CDN-E1~E3-Edge HIT·전송량·Origin.jpg>) |
+| CDN Edge 1개 vs 2개 처리량 한계 | [CDN-Edge1vs2-처리량한계](<측정-스크린샷/CDN-Edge1vs2-처리량한계.jpg>) |
+
+권고 설정(750m)의 Pod 삭제 복구(`213444Z`) 스크린샷은 아직 없다. 녹화 백업과 함께 준비한다.
+
 ## 5. 결과 표 (발표용)
 
 같은 부하 L=650 iteration/s (약 715 req/s), 서버 request `500m` / limit `750m`, 예열 뒤 측정. HPA 2~4 값은 전환 구간이 끝난 뒤다.
