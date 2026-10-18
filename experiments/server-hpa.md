@@ -1,7 +1,7 @@
 # 서버 부하·HPA·복구 실험 결과
 
 - 진행 관리: [orbit#23](https://github.com/ORBIT-CLOUD-LABS/orbit/issues/23) (측정마다 코멘트로 원본 기록)
-- 상태: 사전 측정 완료, 본 실험 진행 중
+- 상태: 측정 완료 (2026-10-17). 권고 배포값 반영은 아래 11 절
 - 측정 도구: [orbit-observability `k6/`](https://github.com/ORBIT-CLOUD-LABS/orbit-observability/tree/develop/k6) `server-hpa` 시나리오, Grafana `load-recovery-experiment` 대시보드
 
 run ID 별 조건·결과·판정을 남긴다. 값은 Prometheus 30초 간격·2분 창 평균이다 (서버·cAdvisor 수집 간격이 30초라 1분 창은 값이 튄다).
@@ -21,8 +21,8 @@ run ID 별 조건·결과·판정을 남긴다. 값은 Prometheus 30초 간격·
 | 서버 이미지 | `orbit-server@sha256:adafcf90f80839710febbf9c880477c30bc87cb62a33830a1496a7eba28ae358` |
 | GitOps revision | `844b202` (측정 중 HPA·자원값은 `kubectl` 임시 패치, 측정 후 git 값으로 복구) |
 | 서버 Pod | 메모리 request=limit `768Mi`, Hikari pool 5/Pod, JVM Serial GC (메모리 768Mi 라 CPU 와 무관하게 Serial) |
-| 클러스터 | worker 3대 × 2 vCPU. ASTRA 물리 12 스레드를 VM vCPU 14개가 나눠 쓴다 |
-| DB VM | `astra-vehicle-db` 1 vCPU, 메모리 3.9GiB. 데이터 디스크는 ASTRA 호스트 NVMe(Samsung SSD 980, 모든 VM 공유) 위 raw 파일 |
+| 클러스터 | worker 3대 × 2 vCPU. ASTRA 물리 12 스레드를 VM vCPU 14개(DB 증설 후 15개)가 나눠 쓴다 |
+| DB VM | `astra-vehicle-db`, 메모리 3.9GiB. **3~6 절은 1 vCPU, 7 절 이후는 2 vCPU** (2026-10-17 16:36 UTC 증설, orbit-infrastructure#65). 데이터 디스크는 ASTRA 호스트 NVMe(Samsung SSD 980, 모든 VM 공유) 위 raw 파일 |
 | 부하 발생기 | ASTRA 호스트에서 `taskset -c 10,11` 로 k6 v2.3.0 실행 (Tailscale 경유 장비는 중계 지연이 섞여 비교 run 에 쓰지 않음) |
 | k6 | `server-hpa`, `VEHICLES=200`(VU 상한), `UPDATE_RATIO=0.1` (체크인 + 10% 매니페스트, 요청 수 ≈ iteration × 1.1) |
 
@@ -147,6 +147,8 @@ phase1 §4 의 HPA "최소 2, 최대 4" 는 확정값이므로 1~3 실험이 유
 
 phase1 확정값(HPA 2~4)과 CPU limit 500m 를 바꾸지 않고 서버가 DB 보다 먼저 막히는 조건이 만들어졌다. 4절의 HPA 1~3 검토는 필요 없어졌다. HPA 목표 사용률은 500m Pod 한계에서의 CPU 사용률(50~55%)을 고려해 50% 로 시험한다.
 
+> 이 조건은 7 절(DB 2 vCPU 재측정, 서버 CPU `750m` 채택)로 대체됐다. 최종 조건·판정은 8 절을 본다.
+
 ## 6. 본 실험: 고정 replica vs HPA
 
 ### 6.1 1차 (2026-10-17, DB 동기화 완화·DB 1 vCPU)
@@ -172,14 +174,114 @@ phase1 확정값(HPA 2~4)과 CPU limit 500m 를 바꾸지 않고 서버가 DB �
 - 예열 후 같은 부하에서는 HPA 4개가 P95·throttling·dropped 모두 낫다. 처리량은 둘 다 부하만큼 받았다
 - 전체 수치는 HPA 쪽이 나빴다. 측정 직전 Pod 재시작으로 생긴 JVM 예열(JIT) 구간이 결과를 좌우했다. HPA 는 예열 CPU 에 반응해 바로 4개로 늘렸지만 새 Pod 도 예열 전이라 함께 밀렸다
 - **판정 보류**: 예열을 분리해 다시 잰다 (Pod 재시작 뒤 낮은 부하로 충분히 예열한 다음 비교 구간 시작, 판정은 예열 이후 구간). scale-out 직후 새 Pod 가 예열 전이라 지연이 일시적으로 커질 수 있다는 점은 결과로 함께 기록한다
+- → **8 절에서 예열을 분리해 다시 재고 판정을 끝냈다.** 1차는 참고 기록이다
 
-## 7. Pod 삭제 복구 실험
+## 7. DB 2 vCPU 재측정과 서버 CPU 설정 결정
 
-(예정)
+6.1 의 판정 보류 뒤 DB VM vCPU 를 2 로 늘리고([orbit-infrastructure#65](https://github.com/ORBIT-CLOUD-LABS/orbit-infrastructure/issues/65), PR #66) 남은 측정을 모두 그 조건에서 다시 했다. 3~6 절(1 vCPU)은 참고 기록으로 남긴다.
 
-## 8. 결과 해석 범위
+### 7.1 `T_db` ≈ 1,000 req/s
 
-- "DB 한계(commit 동기화 완화 후 약 700~750 req/s, DB 1 vCPU) 아래에서 서버 계층이 수평 확장된다"는 범위로만 주장한다
+run `20261017T170253Z-server-hpa` — Pod 2개(worker-1·3), CPU limit 없음, HPA 2~2 고정. 100 iteration/s 로 5분 예열한 뒤 300 → 1,050 까지 단계마다 20초 상승 + 2분 유지.
+
+| 서버 req/s | P95 (check-in) | DB CPU (2 vCPU 평균) | DB user / system (vCPU 합) | Hikari 대기 | dropped |
+| --- | --- | --- | --- | --- | --- |
+| 335 | 6.5ms | 29% | 42% / 8% | 0 | 0 |
+| 489~502 | 6.5ms | 37~38% | 54~55% / 11% | 0 | 0 |
+| 648~674 | 8~9ms | 46~50% | 66~72% / 14~15% | 0 | 0 |
+| 822 | 13ms | 62~63% | 93~95% / 18% | 0 | 0 |
+| 916~996 | 42~68ms | 78~93% | 123~152% / 21~24% | 0~9 | 0 |
+| **1,025~1,096** | **245~414ms** | **94~97%** | 151~156% / 25~26% | 89~132 | 13~57/s |
+
+- **`T_db` ≈ 1,000 req/s** (1 vCPU 의 약 700~750 대비 1.4배). 1,025 req/s 부터 DB CPU 94% 이상 + Hikari 대기 + dropped 가 함께 나타난다. 실패는 0 건
+- DB iowait 는 측정 내내 1% 미만이다 (5 절 동기화 완화 효과가 유지된다). 막는 곳은 DB CPU
+- 같은 시점 worker CPU 최대 74%, 모든 VM steal 합계 최대 2.4% — vCPU 합 15 / 물리 12 스레드에서도 경합은 작다
+- **무효 run `20261017T164038Z`**: orbit-gitops PR #41 머지 뒤 처음 생긴 drift 라 Argo CD 가 16:40:34 자동 sync 로 임시 패치를 되돌렸다. 임시 패치 뒤 Argo CD 로그에 `Skipping auto-sync: most recent sync already to [...]` 가 찍히는 것을 확인하고 측정을 시작한다
+
+### 7.2 막 기동한 500m Pod 는 낮은 부하에서도 무너진다
+
+| 상황 | 부하 | 결과 |
+| --- | --- | --- |
+| 본 실험 1차 HPA run (09:57) | 10 → 150 iteration/s | 20~40 req/s 부터 붕괴, 약 8분 지속 |
+| 7.1 첫 시도 (16:43) | 10 → 100 (5분 상승) | 약 25 req/s 부터 붕괴 |
+| 8 절 B1 예열 (17:29) | 100 iteration/s | 붕괴, 5분 안에 회복 못 함 (P95 4.7~9.3초, Hikari 대기 82~108) |
+| 300m 시험 (07:19) | 3~9 req/s | 붕괴, 회복 못 함 |
+| CPU limit 없음 | 같은 예열 | 문제 없음 |
+
+기동 직후 JVM 이 JIT 컴파일에 CPU 를 많이 쓰는데 CPU 상한에 막혀 응답이 늦어지고, DB 연결(Pod 당 5개)을 오래 잡은 채 Hikari 대기가 쌓인다. 한번 쌓이면 부하가 유지되는 동안 풀리지 않는다. 충분히 예열된 500m Pod 는 같은 조건에서 약 180~220 req/s 를 처리한다.
+
+**HPA 에 주는 영향**: scale-out 으로 들어온 새 Pod 도 기동 직후라 Ready 직후 받는 몫에 무너질 수 있다. 6.1 에서 HPA 쪽이 오히려 나빴던 것도 같은 원인으로 본다.
+
+### 7.3 설정별 비교 → request `500m` / limit `750m` 권고
+
+| 설정 | 기동 (`application_ready_time_seconds`) | 기동 직후 100 iteration/s | Pod 2개 처리량 | run |
+| --- | --- | --- | --- | --- |
+| `500m` (request=limit) | 약 52초 | 붕괴, 회복 못 함 (P95 4.7~9.3초) | 예열 후 370~440 req/s | `172738Z` |
+| `500m` + `-XX:TieredStopAtLevel=1` | 20~22초 | 90~100 req/s 에서 붕괴 | - | `184750Z` |
+| **request `500m` / limit `750m`** | **25~28초** | **P95 최대 442ms, 2분 안에 회복** | 600 req/s 유지, 715 에서 붕괴 | `185946Z`, `192203Z`, `194408Z` |
+| request `500m` / limit `1000m` | 16.6초 | P95 11~28ms, Hikari 대기 0 | 900~1,000 req/s | `175121Z` |
+
+- **`500m` (request=limit) 기각**: 기동 직후 붕괴가 scale-out·Pod 복구마다 재현된다
+- **C1 컴파일러 고정(`-XX:TieredStopAtLevel=1`) 기각**: 기동은 빨라지지만 컴파일된 코드 효율이 떨어져 Pod 2개가 90~100 req/s 에서 무너진다
+- **limit `1000m` 기각**: 기동 직후 문제는 사라지지만 Pod 2개가 DB 한계(약 1,000) 근처까지 처리해 Pod 를 늘려도 개선이 드러나지 않는다 — HPA 효과를 볼 구간이 없어진다
+- **`750m` 채택**: 기동 직후에도 2분 안에 회복하고, 고정 2개 한계(약 600 req/s)가 DB 여유(`0.75 × T_db` ≈ 750) 아래라 1 절 판정 조건을 만족한다. HPA 사용률은 request(`500m`) 기준이라 확장 기준은 바뀌지 않는다
+- `750m` 에서도 Pod 2개 한계 근처(약 380 req/s, `185946Z`)에 한 번 무너졌다가, 같은 설정의 L=550 run 에서는 일시 상승 후 회복했다. **한계 근처에서는 무너지는지 회복하는지가 run 마다 다르다**
+
+## 8. 본 실험 2차: 고정 2개 vs HPA 2~4 (`750m`, 예열 분리)
+
+절차: `rollout restart` → Ready 확인 → HPA 2~2 로 고정한 채 10 → 150 iteration/s 5분 예열(별도 k6 run) → 비교할 HPA 설정으로 patch → 본 측정 `150:30s,150:2m,L:2m,L:6m,150:1m,150:3m`. 예열을 분리해 HPA 가 JIT CPU 에 반응하는 것을 막고, 모든 run 이 같은 예열 상태에서 시작하게 한다.
+
+| run | 조건 | L 유지 구간 처리량 | L 유지 구간 P95 | dropped | 비고 |
+| --- | --- | --- | --- | --- | --- |
+| `192203Z` | 고정 2개, L=550 (약 600 req/s) | 600 req/s 전부 | 180~360ms → 8~9ms | 전체 27건 | 버텨서 L 을 올렸다 |
+| `194408Z` | **고정 2개, L=650 (약 715 req/s)** | **520~600 req/s** | **1.1~1.4초** | 100~180/s | throttling 80~99%, Hikari 대기 150~190 |
+| `200549Z` | **HPA 2~4, 목표 70%** | 전환 뒤 **705~720 req/s 전부** | 전환 뒤 **약 20ms** | 전환 뒤 0 | 20:10:28 replica 3, 20:10:58 replica 4 |
+| `202727Z` | HPA 2~4, 목표 50% | 전환 뒤 700~730 req/s | 전환 뒤 21~37ms | 전환 뒤 0 | 20:31:17 replica 3, 20:31:47 replica 4 |
+
+**판정 (1 절의 두 기준을 따로)**
+
+- **replica 가 늘었다 — 통과.** 부하 상승 30초 안에 scale-up 이 시작되고 1분 안에 최대 4개가 됐다
+- **처리량·P95 가 개선됐다 — 통과.** 같은 부하(약 715 req/s)에서 고정 2개는 520~600 req/s 만 처리하며 P95 1.1~1.4초·dropped 100~180/s 가 끝까지 이어졌고, HPA 2~4 는 부하를 전부 처리하며 P95 약 20ms·dropped 0 이었다
+- **단서 — 전환 구간이 있다.** scale-out 직후 바로 좋아지지 않는다. 새 Pod 예열 때문에 4~6분 동안 P95 가 최대 2.2~2.3초로 흔들린 뒤 회복한다 (`200549Z` 는 20:10:30~20:15:30). 발표에서는 이 구간을 함께 설명한다
+- **HPA 목표는 70% 유지.** 50% 도 scale 시점이 같고(부하 상승 약 30초 뒤) 전환 구간이 오히려 조금 길었다. 배포값(70%)을 바꿀 이유가 없다
+
+## 9. Pod 삭제 복구 실험
+
+Pod 2개 고정(HPA 2~2), 예열 뒤 150 iteration/s(약 165 req/s) 유지 — Pod 1개로도 처리 가능한 양이라 실패가 생기면 삭제 때문으로 본다. 3분에 `kubectl delete pod <1개>`(정상 종료: preStop 5초 + graceful 30초), 8분에 `--grace-period=0 --force`(강제 종료).
+
+| | limit `1000m` (`181256Z`) | **limit `750m` (`213444Z`)** | `500m` (`183046Z`) |
+| --- | --- | --- | --- |
+| 예열 | 문제 없음 | 문제 없음 | 약 45 req/s 에서 붕괴, 4분 뒤 회복 |
+| 정상 삭제 실패 | 0 | **2 (EOF)** | 33 (EOF) |
+| 정상 삭제 뒤 | P95 변화 없음 (13ms) | **새 Pod 예열 약 2분 P95 455~793ms, 이후 회복** | P95 3~5초, 회복 늦음 |
+| 강제 삭제 실패 | 103 (2초 동안 connection reset) | **113 (2초 동안 connection reset)** | 70 (request timeout) + 1 |
+| 강제 삭제 뒤 | 회복 | **P95 10~16ms 유지** | 남은 Pod 와 새 Pod 가 함께 무너져 측정 끝까지 P95 8~10초 |
+| 전체 | 실패 0.08%, P95 12ms, dropped 0 | **실패 0.09%, P95 105ms, dropped 0** | 실패 0.13%, P95 5.6초, dropped 41,752 |
+
+- `available` replica 2 → 1 → 2 복귀는 세 설정 모두 약 45초다 (`500m` 은 기동 자체가 약 52초)
+- **정상 종료는 여유 있는 설정에서 실패 없이 동작한다.** `500m` 의 정상 삭제 실패 33건은 종료 처리 문제가 아니라, 남은 Pod 1개가 부하를 혼자 받으면서 무너진 결과다
+- **강제 종료는 진행 중이던 연결만큼 실패한다** (약 100건, 2초). 설정으로 줄일 수 있는 값이 아니다
+- 권고 설정(`750m`)은 정상 종료 실패가 거의 없고, 새 Pod 예열 구간만 잠시 느려졌다가 회복한다
+
+## 10. 결과 해석 범위
+
+- "DB 한계(2 vCPU·commit 동기화 완화 후 약 1,000 req/s) 아래에서 서버 계층이 수평 확장된다"는 범위로만 주장한다
 - DB commit 동기화를 완화한 조건(최대 약 1초치 유실 허용)의 결과다. 기본값에서는 DB 한계가 약 290 req/s 라 같은 결론이 나오지 않는다
-- 단일 ASTRA 호스트·DB 1대·NFS 1대라 HA 를 주장하지 않는다
-- DB 한계는 ASTRA 호스트의 소비자용 NVMe 를 모든 VM 이 함께 쓰는 환경의 값이다
+- 권고 설정은 `requests ≠ limits`(QoS Burstable)다. Pod 가 request 를 넘겨 쓸 노드 여유가 있을 때의 결과이고, 노드가 꽉 차면 `750m` 까지 올라가지 못한다
+- 단일 ASTRA 호스트·DB 1대·NFS 1대·Origin 1개를 남기므로 전체 고가용성(HA)으로 표현하지 않는다
+- DB 한계는 ASTRA 호스트의 소비자용 NVMe(Samsung SSD 980)를 모든 VM 이 함께 쓰는 환경의 값이다
+- 부하는 k6 가 만든 체크인·매니페스트 요청이다. 실차 Agent 로 검증한 값이 아니다
+- scale-out 직후 4~6분 전환 구간이 있으므로 "HPA 가 즉시 복구한다"고 표현하지 않는다
+
+## 11. 확정값과 후속 작업
+
+| 값 | 확정값 | 근거 |
+| --- | --- | --- |
+| 서버 CPU | request `500m` / limit `750m` | 7.3, [orbit-gitops#42](https://github.com/ORBIT-CLOUD-LABS/orbit-gitops/issues/42) (PR #43) |
+| 서버 HPA replica | 최소 2, 최대 4 (유지) | 4 절 |
+| HPA 목표 CPU 사용률 | `70%` (유지) | 8 절 |
+| DB VM | 2 vCPU, `innodb_flush_log_at_trx_commit=2`·`sync_binlog=0` | 7.1, orbit-infrastructure#63·#65 |
+
+- 서버 CPU 는 `requests ≠ limits`(QoS Guaranteed → Burstable)로 바뀐다. orbit-gitops PR #43 에 반영됐고, 머지·배포 뒤 새 Pod 의 limit·기동 시간을 확인한다
+- 공통 값 표는 [docs/phase1.md](../docs/phase1.md) §4 (orbit PR #40)
+- run 별 원본 기록은 [orbit#23](https://github.com/ORBIT-CLOUD-LABS/orbit/issues/23) 코멘트에 있다. 측정 구간 Grafana 스크린샷은 저장소에 커밋하지 않는다
