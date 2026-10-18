@@ -21,11 +21,11 @@ Phase1 은 orbit-astra 한 대만 사용한다. 범위와 공통 값은 [phase1.
 | `astra-worker-2` | Kubernetes worker | 2 | 8 GB | 35 GB | - | `192.168.100.103` |
 | `astra-worker-3` | Kubernetes worker | 2 | 8 GB | 35 GB | - | `192.168.100.104` |
 | `astra-nfs` | 펌웨어 원본 NFS export | 1 | 4 GB | 20 GB | 45 GB | `192.168.100.105` |
-| `astra-vehicle-db` | MySQL 8 (OTA 서버 DB) | 1 | 4 GB | 20 GB | 15 GB | `192.168.100.106` |
+| `astra-vehicle-db` | MySQL 8 (OTA 서버 DB) | 2 | 4 GB | 20 GB | 15 GB | `192.168.100.106` |
 | `astra-monitoring` | Prometheus, Loki, Grafana | 2 | 8 GB | 25 GB | 20 GB | `192.168.100.107` |
-| **합계** | **8대** | **14** | **50 GB** | **230 GB** | **80 GB** |  |
+| **합계** | **8대** | **15** | **50 GB** | **230 GB** | **80 GB** |  |
 
-- VM vCPU 합계(14)가 호스트 스레드(12)보다 많다. 부하 시험 중에는 VM 끼리 물리 CPU 를 나눠 쓰므로 호스트 CPU 사용률을 함께 기록한다.
+- VM vCPU 합계(15)가 호스트 스레드(12)보다 많다. 부하 시험 중에는 VM 끼리 물리 CPU 를 나눠 쓰므로 호스트 CPU 사용률을 함께 기록한다. 2026-10-17 측정에서는 서버가 DB 한계 부근까지 부하를 받는 동안에도 호스트 CPU 최대 43%, 전 VM steal 합계 최대 2.4% 로 경합은 작았다.
 - VM 을 나눠도 호스트의 전원·디스크·CPU 장애는 격리되지 않는다.
 
 ### Kubernetes
@@ -34,7 +34,7 @@ Phase1 은 orbit-astra 한 대만 사용한다. 범위와 공통 값은 [phase1.
 |---|---|
 | 버전 | v1.33 (kubeadm), containerd, Calico |
 | 노드 | control plane 1 (`NoSchedule`), worker 3 |
-| 배포 | Argo CD 가 `orbit-gitops` `main` 을 읽어 반영 (수동 Sync) |
+| 배포 | Argo CD 가 `orbit-gitops` `main` 을 읽어 반영 (`automated` sync, `prune`·`selfHeal` 꺼짐) |
 | 이미지 | GHCR `ghcr.io/orbit-cloud-labs/*` (Public) |
 
 worker 3대 모두 일반 Pod 를 받는다. `astra-worker-3` 의 예비 노드 taint 는 해제한다 (orbit-infrastructure#46).
@@ -58,7 +58,8 @@ worker 3대 모두 일반 Pod 를 받는다. `astra-worker-3` 의 예비 노드 
 ### DB
 
 - MySQL 8, 데이터 디스크 `/srv/db-data` (15 GB), `max_connections` 200.
-- 서버 Pod 수 × 연결 pool 크기가 `max_connections` 안에 여유 있게 들어와야 한다. vCPU 가 1개라 서버 HPA 실험에서 먼저 병목이 될 수 있다.
+- 서버 Pod 수 × 연결 pool 크기가 `max_connections` 안에 여유 있게 들어와야 한다 (Phase1 은 Pod 당 Hikari 5, 최대 4 Pod).
+- DB 가 서버보다 먼저 막히지 않도록 2 vCPU 로 증설하고([orbit-infrastructure#65](https://github.com/ORBIT-CLOUD-LABS/orbit-infrastructure/issues/65)) commit 디스크 동기화를 완화했다 (`innodb_flush_log_at_trx_commit=2`, `sync_binlog=0`, [orbit-infrastructure#63](https://github.com/ORBIT-CLOUD-LABS/orbit-infrastructure/issues/63)). 이 조건의 DB 한계는 약 1,000 req/s 이고, 기본값(`1`/`1`)에서는 약 290 req/s 였다 ([#23](https://github.com/ORBIT-CLOUD-LABS/orbit/issues/23), `experiments/server-hpa.md` 5·7.1 절).
 
 ### 모니터링
 
