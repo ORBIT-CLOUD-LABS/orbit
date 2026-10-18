@@ -284,4 +284,4 @@ Pod 2개 고정(HPA 2~2), 예열 뒤 150 iteration/s(약 165 req/s) 유지 — P
 
 - 서버 CPU 는 `requests ≠ limits`(QoS Guaranteed → Burstable)로 바뀐다. orbit-gitops PR #43 에 반영됐고, 머지·배포 뒤 새 Pod 의 limit·기동 시간을 확인한다
 - 공통 값 표는 [docs/phase1.md](../docs/phase1.md) §4 (orbit PR #40)
-- run 별 원본 기록은 [orbit#23](https://github.com/ORBIT-CLOUD-LABS/orbit/issues/23) 코멘트에 있다. 측정 구간 Grafana 스크린샷은 저장소에 커밋하지 않는다
+- run 별 원본 기록은 [orbit#23](https://github.com/ORBIT-CLOUD-LABS/orbit/issues/23) 코멘트에 있다. 측정 구간 Grafana 스크린샷은 발표 백업용으로 [`발표 자료/측정-스크린샷/`](<../발표 자료/측정-스크린샷/>) 에 두고, 장면별 목록은 [시연 시나리오](<../발표 자료/서버-HPA-시연-시나리오.md>) §4 에 있다
