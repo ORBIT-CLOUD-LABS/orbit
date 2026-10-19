@@ -69,6 +69,7 @@ run ID 는 `20261017T` 뒤 시각이다 (예: `194408Z` = `20261017T194408Z-serv
 | HPA 2~4 L=650 요청률·P95 | [B2-HPA70-750m-L650-요청률·P95·Hikari](<측정-스크린샷/B2-HPA70-750m-L650-요청률·P95·Hikari.jpg>) |
 | HPA 2~4 scale-out (replica·사용률·CPU) | [B2-HPA70-750m-L650-replica·HPA·CPU](<측정-스크린샷/B2-HPA70-750m-L650-replica·HPA·CPU.jpg>) |
 | 750m Pod 2개 한계 (throttling·Hikari 대기) | [limit750m-2Pod한계-throttling·Hikari대기](<측정-스크린샷/limit750m-2Pod한계-throttling·Hikari대기.jpg>) |
+| **Pod 삭제 복구 (권고 설정 limit 750m, `213444Z`)** | [C3-limit750m-pod삭제-replica·HPA·CPU](<측정-스크린샷/C3-limit750m-pod삭제-replica·HPA·CPU.jpg>), [C3-limit750m-pod삭제-차량API요청률·P95](<측정-스크린샷/C3-limit750m-pod삭제-차량API요청률·P95.jpg>), [C3-limit750m-k6-요청률·P95·VU](<측정-스크린샷/C3-limit750m-k6-요청률·P95·VU.jpg>) |
 | Pod 삭제 복구 (limit 1000m) | [C1-limit1000m-pod삭제-replica·CPU](<측정-스크린샷/C1-limit1000m-pod삭제-replica·CPU.jpg>) |
 | Pod 삭제 뒤 붕괴 (request=limit 500m) | [C2-limit500m-pod삭제-붕괴·probe실패](<측정-스크린샷/C2-limit500m-pod삭제-붕괴·probe실패.jpg>), [C2-limit500m-k6-VU·dropped](<측정-스크린샷/C2-limit500m-k6-VU·dropped.jpg>) |
 | 300m 붕괴 원인 로그 (패널 7) | [300m-붕괴-WARN로그](<측정-스크린샷/300m-붕괴-WARN로그.jpg>) |
@@ -76,7 +77,14 @@ run ID 는 `20261017T` 뒤 시각이다 (예: `194408Z` = `20261017T194408Z-serv
 | CDN 캐시 (Edge HIT·전송량·Origin) | [CDN-E1~E3-Edge HIT·전송량·Origin](<측정-스크린샷/CDN-E1~E3-Edge HIT·전송량·Origin.jpg>) |
 | CDN Edge 1개 vs 2개 처리량 한계 | [CDN-Edge1vs2-처리량한계](<측정-스크린샷/CDN-Edge1vs2-처리량한계.jpg>) |
 
-권고 설정(750m)의 Pod 삭제 복구(`213444Z`) 스크린샷은 아직 없다. 녹화 백업과 함께 준비한다.
+C3(`213444Z`) 화면 읽는 법 (시간은 UTC):
+
+- 21:41:18 정상 삭제 → available 2 → 1 → 2. 새 Pod 는 startup probe 를 21:41:53 까지 실패한 뒤 Ready (available 복귀 약 45초)
+- 21:43:45 새 Pod 가 부하를 받으며 예열하다 readiness probe 를 1회 실패. 이때부터 약 2분 동안 P95 가 오른다 (1분 창 기준 455~793ms, 21:46 회복)
+- 21:46:17 강제 삭제 → 실패 113건(2초) 뒤 P95 9~16ms
+- 대시보드 P95 패널은 창이 길어 21:48 무렵까지 높아 보인다. 수치는 위 1분 창 값과 5 절 표를 쓴다
+
+녹화 백업은 아직 없다.
 
 ## 5. 결과 표 (발표용)
 
