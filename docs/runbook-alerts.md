@@ -6,7 +6,8 @@ Alertmanager 알림이 왔을 때 무엇을 확인하고 어떻게 조치하는�
 ([orbit-observability#29](https://github.com/ORBIT-CLOUD-LABS/orbit-observability/issues/29)).
 각 알림의 `runbook_url` 은 이 문서의 해당 절을 가리킨다.
 
-알림은 슬랙 `#5-alerts` 로 온다. 통지가 끊긴 것은 `Watchdog` 으로 판단한다 (아래).
+알림은 디스코드로 온다 (수신 채널은 웹후크를 만들 때 고른 채널로 고정된다 —
+orbit-observability `alertmanager/README.md`). 통지가 끊긴 것은 `Watchdog` 으로 판단한다 (아래).
 
 ## 공통
 
@@ -59,7 +60,7 @@ amtool silence query --alertmanager.url=http://localhost:9093
 **무엇이 깨졌나** — 깨진 게 없다. 항상 발화하는 생존 신호이고 사람에게 보내지 않는다
 (`severity: none` → `orbit-null` 수신처). **이 알림이 사라진 것이 이상 신호다.**
 
-**어디를 보나** — 슬랙에는 오지 않으므로 Alertmanager 에서 직접 본다.
+**어디를 보나** — 디스코드에는 오지 않으므로 Alertmanager 에서 직접 본다.
 
 ```bash
 curl -s localhost:9093/api/v2/alerts | jq -r '.[].labels.alertname' | grep Watchdog
@@ -78,15 +79,15 @@ journalctl -u prometheus -n 50 --no-pager
 `promtool check rules /etc/prometheus/rules/alerts.yml` 로 확인한 뒤 `systemctl reload prometheus`.
 `activeAlertmanagers` 가 비었으면 Alertmanager 를 재시작한다.
 
-**오탐 가능성** — 통지 경로가 멀쩡해도 Watchdog 은 슬랙에 오지 않는다(의도된 동작). 슬랙이
-조용한 것 자체는 신호가 아니다. 반대로 **슬랙 통지만 끊긴 경우**는 Watchdog 으로 잡히지
-않으므로, 아래 통지 실패 확인을 쓴다.
+**오탐 가능성** — 통지 경로가 멀쩡해도 Watchdog 은 디스코드에 오지 않는다(의도된 동작).
+디스코드가 조용한 것 자체는 신호가 아니다. 반대로 **디스코드 통지만 끊긴 경우**는
+Watchdog 으로 잡히지 않으므로, 아래 통지 실패 확인을 쓴다.
 
 ```bash
 journalctl -u prometheus-alertmanager --since '-1h' --no-pager | grep -iE 'notify|error'
 ```
 
-`open /etc/alertmanager/slack-webhook-url: permission denied` 는 webhook 파일 소유자 문제다
+`open /etc/alertmanager/discord-webhook-url: permission denied` 는 webhook 파일 소유자 문제다
 (Alertmanager 는 `prometheus` 계정으로 돈다). 절차는 orbit-observability `alertmanager/README.md`.
 
 ---
