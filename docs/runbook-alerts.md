@@ -6,8 +6,9 @@ Alertmanager 알림이 왔을 때 무엇을 확인하고 어떻게 조치하는�
 ([orbit-observability#29](https://github.com/ORBIT-CLOUD-LABS/orbit-observability/issues/29)).
 각 알림의 `runbook_url` 은 이 문서의 해당 절을 가리킨다.
 
-알림은 디스코드로 온다 (수신 채널은 웹후크를 만들 때 고른 채널로 고정된다 —
-orbit-observability `alertmanager/README.md`). 통지가 끊긴 것은 `Watchdog` 으로 판단한다 (아래).
+알림은 디스코드 `#orbit-알림` 으로 온다. 통지가 끊긴 것은 `Watchdog` 으로 판단한다 (아래).
+채널은 웹후크를 만들 때 고정되므로 바꿀 때는 설정이 아니라 웹후크를 다시 만든다
+(orbit-observability `alertmanager/README.md`).
 
 ## 공통
 
