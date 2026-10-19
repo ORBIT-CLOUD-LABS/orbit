@@ -6,8 +6,9 @@ Alertmanager 알림이 왔을 때 무엇을 확인하고 어떻게 조치하는�
 ([orbit-observability#29](https://github.com/ORBIT-CLOUD-LABS/orbit-observability/issues/29)).
 각 알림의 `runbook_url` 은 이 문서의 해당 절을 가리킨다.
 
-알림은 디스코드로 온다 (수신 채널은 웹후크를 만들 때 고른 채널로 고정된다 —
-orbit-observability `alertmanager/README.md`). 통지가 끊긴 것은 `Watchdog` 으로 판단한다 (아래).
+알림은 디스코드 `#orbit-알림` 으로 온다. 통지가 끊긴 것은 `Watchdog` 으로 판단한다 (아래).
+채널은 웹후크를 만들 때 고정되므로 바꿀 때는 설정이 아니라 웹후크를 다시 만든다
+(orbit-observability `alertmanager/README.md`).
 
 ## 공통
 
@@ -87,8 +88,27 @@ Watchdog 으로 잡히지 않으므로, 아래 통지 실패 확인을 쓴다.
 journalctl -u prometheus-alertmanager --since '-1h' --no-pager | grep -iE 'notify|error'
 ```
 
-`open /etc/alertmanager/discord-webhook-url: permission denied` 는 webhook 파일 소유자 문제다
-(Alertmanager 는 `prometheus` 계정으로 돈다). 절차는 orbit-observability `alertmanager/README.md`.
+통지 실패는 로그에만 남는다. `amtool check-config` 도 Watchdog 도 잡지 못하고,
+`unrecoverable` 이 붙은 실패는 재시도도 하지 않으므로 **알림이 조용히 사라진다.**
+
+| 로그 | 원인 | 조치 |
+|---|---|---|
+| `open /etc/alertmanager/discord-webhook-url: permission denied` | webhook 파일 소유자. Alertmanager 는 `prometheus` 계정으로 돈다 | `chown prometheus:prometheus`, `chmod 0400` |
+| `unexpected status code 400: {"attachments": ["0"]}` | attachment 안의 URL 이 거부된 것이다. 디스코드는 TLD 없는 호스트명 URL 을 받지 않는다 | 설정의 `title_link` 를 본다 (아래) |
+| `unexpected status code 401`·`404` | 웹후크가 지워졌거나 URL 이 틀렸다 | 디스코드에서 웹후크 재생성 |
+
+`400 {"attachments": ["0"]}` 이 나오면 로드된 설정의 `title_link` 를 확인한다.
+
+```bash
+curl -s localhost:9093/api/v2/status | jq -r .config.original | grep title_link
+```
+
+`{{ template "slack.default.titlelink" . }}` 로 보이면 그게 원인이다. 기본 템플릿은
+`{{ .ExternalURL }}/#/alerts?receiver=...` 로 펼쳐지고, `--web.external-url` 이 없으면
+`.ExternalURL` 이 호스트명(`http://astra-monitoring:9093/...`)이 된다. 설정에 IP 로 명시된
+값(`http://192.168.100.107:9093/...`)이 보여야 정상이다. 2026-10-18·10-19 에 두 번 발생했다.
+
+절차와 원인 분석은 orbit-observability `alertmanager/README.md` 와 같은 레포 #35 에 있다.
 
 ---
 
