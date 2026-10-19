@@ -42,7 +42,7 @@ ASTRA 한 대 위의 Kubernetes 에 OTA 서버와 펌웨어 전달 계층(CDN)�
 - Edge 는 NFS 를 마운트하지 않는다. Origin 의 HTTP 응답을 Pod 별 `emptyDir` 캐시에 저장하며, 두 Edge 는 캐시를 공유하지 않는다.
 - 같은 클러스터 안의 캐시 계층을 모사한 것이며 지리 분산 CDN 이 아니다.
 - 외부 진입점(Gateway API·Ingress)은 두지 않는다. 클라이언트가 서버 주소와 파일 주소를 따로 사용하므로 경로 분기가 필요 없다.
-- 배포는 Argo CD 가 `orbit-gitops` 를 읽어 반영한다. Phase1 실험 동안은 수동 Sync 를 유지하고 이미지·설정을 고정한다.
+- 배포는 Argo CD 가 `orbit-gitops` 를 읽어 반영한다. `automated` sync 를 켜고 `prune`·`selfHeal` 은 끈다. Phase1 실험 동안은 이미지·설정을 고정한다 (측정 중 주의는 §4 마지막 항목).
 - worker 3대 모두 일반 Pod 를 받는다. 노드를 늘려도 ASTRA 의 물리 CPU(12 스레드)는 늘지 않는다.
 
 VM·IP·사양은 [infrastructure-plan.md](infrastructure-plan.md).
