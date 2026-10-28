@@ -45,6 +45,7 @@ AWS (관리형): S3 (펌웨어 Origin), RDS (DB) — flow.md 기준, §5 참고
 |---|---|---|---|
 | OTA 서버 등 앱 | 워커 3대 | - | 계획 |
 | CDN Edge (nginx) | 워커 3대 | - | 계획 ([flow.md](flow.md) §0) |
+| 프론트엔드 대시보드 | 워커 3대 | - | 계획 ([flow.md](flow.md) §8) |
 | Argo CD | 클러스터 | 1 CPU / 2Gi | 계획 |
 | Cilium (Hubble 포함) | DaemonSet, 모든 노드 | 0.5 CPU / 512Mi (노드당) | 계획 |
 | node-exporter | DaemonSet, 모든 노드 | 0.2 CPU / 128Mi (노드당) | 계획 |
