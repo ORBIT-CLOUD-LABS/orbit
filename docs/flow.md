@@ -2,19 +2,19 @@
 
 - 상태: 설계중 (v2)
 - 작성일: 2026-10-28
-- Phase1 대비 바뀐 점: **CDN Edge를 여러 개 두고, 차량 위치에서 가장 가까운 Edge에서 업데이트 파일을 받는다.** 바뀐 곳은 `[Phase2]`로 표시했다.
+- 핵심: **CDN Edge를 여러 개 두고, 차량 위치에서 가장 가까운 Edge에서 업데이트 파일을 받는다.** 새로 추가되거나 바뀐 곳은 `[Phase2]`로 표시했다.
 
 ## 0. 등장 주체
 
 | 주체 | 역할 |
 |---|---|
 | 관리자 | 업데이트 파일 등록, 캠페인 등록 |
-| OTA 서버 | 파일 메타데이터·캠페인·차량 상태 관리, 대상 판정, **[Phase2] 가까운 Edge 선택**, 매니페스트 발급, SSE 전송 |
+| OTA 서버 | 파일 메타데이터·캠페인·차량 상태 관리, 대상 판정, **[Phase2] 가까운 Edge 선택, 서명 URL 발급**, 매니페스트 발급, SSE 전송 |
 | Origin (**[Phase2] AWS S3**) | 업데이트 파일 원본 저장소. Edge가 MISS일 때 HTTPS로 가져간다 |
-| CDN Edge (nginx Pod) | **[Phase2] 지역별로 여러 개.** 차량에 파일 배포, 캐시 미스면 Origin에서 가져옴 |
+| CDN Edge (nginx Pod) | **[Phase2] 지역별로 여러 개. 서명 URL 검증.** 차량에 파일 배포, 캐시 미스면 Origin에서 가져옴 |
 | 차량 | 등록, 주기적 체크인(**[Phase2] 위치 포함**), 다운로드·검증·설치, 결과 보고 |
 | 프론트엔드 | 대시보드 (스냅샷 + SSE) |
-| DB (**[Phase2] AWS RDS for MySQL 8**) | Phase1 테이블 (**[Phase2]** 위치·Edge 컬럼 추가, §4) |
+| DB (**[Phase2] AWS RDS for MySQL 8**) | 기존 테이블 (**[Phase2]** 위치·Edge 컬럼 추가, §4) |
 
 ### Edge 구성 (클러스터 안)
 
@@ -42,6 +42,7 @@ orbit:
     default-edge-id: edge-seoul      # 위치를 모를 때 쓰는 Edge
     fallback-count: 2                # fallbackUrls 개수
     location-max-age: 10m            # 이보다 오래된 위치는 쓰지 않음
+    signed-url-ttl: 1h               # 서명 URL 유효 기간 (서명 비밀 값은 ConfigMap이 아닌 Secret, §5)
     edges:
       - id: edge-seoul
         name: 서울
@@ -71,12 +72,12 @@ orbit:
 | Origin | S3 버킷 1개 (비공개). 객체 키 `firmware/{model}/{version}/firmware.bin` |
 | S3 쓰기 | OTA 서버만. `s3:PutObject` 권한만 가진 IAM 자격 증명 |
 | S3 읽기 | Edge만. 버킷 정책으로 Edge가 나가는 IP(`aws:SourceIp`)에만 `s3:GetObject` 허용 |
-| DB | RDS for MySQL 8. 스키마·쿼리는 Phase1과 같고 `DB_URL`만 RDS 엔드포인트로 바꾼다 |
+| DB | RDS for MySQL 8. 스키마·쿼리는 그대로 두고 `DB_URL`만 RDS 엔드포인트로 바꾼다 |
 | 자격 증명 | IAM 키, DB 비밀번호는 코드·ConfigMap에 두지 않는다 (Secret 또는 Vault, §7) |
 
-- 서버는 NFS에 쓰지 않는다. Phase1의 NFS·Origin nginx Pod는 쓰지 않는다.
+- 서버는 NFS에 쓰지 않는다. 기존 NFS·Origin nginx Pod는 쓰지 않는다.
 - Edge가 S3를 직접 Origin으로 쓰므로 S3 요청에 서명(SigV4)을 붙이지 않는다. 그래서 버킷 정책의 IP 제한으로 Edge만 읽게 한다.
-- Edge 캐시가 S3 요청 수와 S3 → 인터넷 전송량(비용)을 줄인다. 캐시 효과 측정은 Phase1 CDN 실험과 같은 방식으로 한다.
+- Edge 캐시가 S3 요청 수와 S3 → 인터넷 전송량(비용)을 줄인다. 캐시 효과 측정은 기존 CDN 실험과 같은 방식으로 한다.
 
 ## 1. 전체 흐름
 
@@ -110,9 +111,11 @@ sequenceDiagram
     V->>S: ⑤ 매니페스트 요청
     S->>S: [P2] 차량 위치 → 가까운 정상 Edge 순으로 정렬
     S->>DB: [P2] vehicle_state.assigned_edge_id 기록
-    S-->>V: downloadUrl(가장 가까운 Edge), [P2] fallbackUrls
+    S->>S: [P2] URL마다 서명(md5, expires) 생성
+    S-->>V: downloadUrl(가장 가까운 Edge), [P2] fallbackUrls, urlExpiresAt
 
-    V->>E: ⑥ GET downloadUrl
+    V->>E: ⑥ GET downloadUrl?md5=..&expires=..
+    E->>E: [P2] 서명·만료 검증 (실패면 403 / 410)
     alt 캐시 HIT
         E-->>V: 파일 (X-Cache-Status: HIT)
     else 캐시 MISS
@@ -133,7 +136,7 @@ sequenceDiagram
 
 ### ① Origin 파일 등록 (관리자)
 
-API는 Phase1과 같고 저장 위치만 S3로 바뀐다. `POST /api/v1/admin/artifacts` · `multipart/form-data` · `Bearer {admin-token}`
+API는 그대로이고 저장 위치만 S3로 바뀐다. `POST /api/v1/admin/artifacts` · `multipart/form-data` · `Bearer {admin-token}`
 
 1. 관리자가 `file`, `model`, `version`, (선택) `sha256`을 올린다.
 2. 같은 `model + version`이 있으면 `409 ARTIFACT_VERSION_EXISTS` (S3에 올리기 전에 확인).
@@ -151,7 +154,7 @@ API는 Phase1과 같고 저장 위치만 S3로 바뀐다. `POST /api/v1/admin/ar
 
 ### ② 캠페인 등록 (관리자)
 
-Phase1과 같다. `POST /api/v1/admin/campaigns` · `Bearer {admin-token}`
+`POST /api/v1/admin/campaigns` · `Bearer {admin-token}`
 
 요청: `name`, `artifactId`, `targetVersion`, `target{model, hwVersions[], regions[], currentVersionMin, currentVersionMax}`, `startAt`, `endAt`
 
@@ -164,7 +167,7 @@ Phase1과 같다. `POST /api/v1/admin/campaigns` · `Bearer {admin-token}`
 
 ### ③ 차량 등록 · 토큰 발급 (차량)
 
-Phase1과 같다. `POST /api/v1/vehicles/register` · `Bearer {enrollment-key}`
+`POST /api/v1/vehicles/register` · `Bearer {enrollment-key}`
 
 요청: `vehicleId`, `model`, `hwVersion`, `region`, `currentVersion`
 
@@ -200,7 +203,7 @@ Phase1과 같다. `POST /api/v1/vehicles/register` · `Bearer {enrollment-key}`
 2. `vehicle_state`의 `current_version`, `last_seen_at`을 덮어쓴다.
 3. **[Phase2]** `location`이 있으면 `vehicle_state`의 `latitude`, `longitude`, `location_updated_at`을 덮어쓴다. 없으면(GPS 미수신) 이전 값을 그대로 둔다. 좌표 범위가 틀리면 `400 INVALID_INPUT`.
 4. `lastUpdate`가 있으면 `update_result`에 `(vehicle_id, campaign_id)` 기준으로 덮어쓴다(멱등). **[Phase2]** `edgeId`(실제로 받은 Edge)도 함께 저장한다.
-5. 대상 여부를 판정해 응답한다. 판정 규칙은 Phase1과 같다 (위치는 판정에 쓰지 않는다).
+5. 대상 여부를 판정해 응답한다. 위치는 판정에 쓰지 않는다.
 
 응답
 
@@ -221,7 +224,7 @@ Phase1과 같다. `POST /api/v1/vehicles/register` · `Bearer {enrollment-key}`
 
 `GET /api/v1/vehicles/{vehicleId}/campaigns/{campaignId}/manifest` · `Bearer {vehicle-token}`
 
-1. 대상 여부를 다시 확인한다 (Phase1과 같음). 판정 순서 `404 CAMPAIGN_NOT_FOUND` → `410 CAMPAIGN_INACTIVE` → `409 NOT_UPDATE_TARGET`.
+1. 대상 여부를 다시 확인한다. 판정 순서 `404 CAMPAIGN_NOT_FOUND` → `410 CAMPAIGN_INACTIVE` → `409 NOT_UPDATE_TARGET`.
 2. **[Phase2] Edge 선택**
    1. 설정의 Edge 목록 중 헬스체크가 정상인 Edge만 후보로 둔다.
    2. `vehicle_state`의 마지막 위치와 각 Edge 좌표의 거리(Haversine, km)를 계산해 가까운 순으로 정렬한다.
@@ -229,6 +232,10 @@ Phase1과 같다. `POST /api/v1/vehicles/register` · `Bearer {enrollment-key}`
    4. 위치가 없거나 너무 오래됐으면(`location_updated_at`이 `location-max-age` 초과) 기본 Edge(`default-edge-id`)를 첫 번째로 두고, 나머지는 설정 순서대로 둔다.
    5. 후보가 하나도 없으면 `503 NO_AVAILABLE_EDGE`. 차량은 다음 체크인에 다시 시도한다.
 3. **[Phase2]** 고른 Edge를 `vehicle_state.assigned_edge_id`에 기록한다 (대시보드에서 차량별 배정 Edge 표시용).
+4. **[Phase2] 서명 URL 생성**
+   1. `expires` = 지금 + `signed-url-ttl`(기본 1시간), Unix 초.
+   2. `md5` = `base64url(MD5("{expires}{artifact.path} {secret}"))`. 끝의 `=`는 뺀다.
+   3. 모든 URL(`downloadUrl`, `fallbackUrls`)에 같은 `?md5={md5}&expires={expires}`를 붙인다.
 
 응답
 
@@ -239,16 +246,19 @@ Phase1과 같다. `POST /api/v1/vehicles/register` · `Bearer {enrollment-key}`
   "fileSize": 20971520,
   "sha256": "a80ed4b4...",
   "edge": { "edgeId": "edge-seoul", "distanceKm": 3.2 },
-  "downloadUrl": "http://192.168.100.102:30081/firmware/MODEL-A/1.1.0/firmware.bin",
+  "downloadUrl": "http://192.168.100.102:30081/firmware/MODEL-A/1.1.0/firmware.bin?md5=Xb3kQ9...&expires=1761649200",
   "fallbackUrls": [
-    { "edgeId": "edge-daejeon", "url": "http://192.168.100.102:30082/firmware/MODEL-A/1.1.0/firmware.bin" },
-    { "edgeId": "edge-busan",   "url": "http://192.168.100.102:30083/firmware/MODEL-A/1.1.0/firmware.bin" }
-  ]
+    { "edgeId": "edge-daejeon", "url": "http://192.168.100.102:30082/firmware/MODEL-A/1.1.0/firmware.bin?md5=Xb3kQ9...&expires=1761649200" },
+    { "edgeId": "edge-busan",   "url": "http://192.168.100.102:30083/firmware/MODEL-A/1.1.0/firmware.bin?md5=Xb3kQ9...&expires=1761649200" }
+  ],
+  "urlExpiresAt": "2026-10-28T11:00:00Z"
 }
 ```
 
-- URL은 `{edge.baseUrl}{artifact.path}`로 만든다. Edge마다 경로가 같으므로 `baseUrl`만 바꾼다.
-- Edge 목록은 메모리에 있으므로 Edge 선택에 DB를 읽지 않는다.
+- URL은 `{edge.baseUrl}{artifact.path}?md5=..&expires=..`로 만든다. Edge마다 경로가 같으므로 `baseUrl`만 바꾼다.
+- **[Phase2]** 서명에는 host를 넣지 않고 경로만 넣는다. 그래서 같은 서명이 모든 Edge에서 통하고, 모든 Edge가 같은 비밀 값을 가져야 한다.
+- **[Phase2]** 서명은 차량별이 아니다. URL이 유출되면 만료 전까지는 누구나 받을 수 있으므로 유효 기간을 길게 잡지 않는다.
+- Edge 목록은 메모리에 있으므로 Edge 선택에 DB를 읽지 않는다. 서명 생성도 계산만 하므로 DB를 읽지 않는다.
 
 ### [Phase2] Edge 헬스체크 (OTA 서버 내부, API 아님)
 
@@ -259,29 +269,53 @@ Phase1과 같다. `POST /api/v1/vehicles/register` · `Bearer {enrollment-key}`
 
 ### ⑥ 업데이트 파일 다운로드 (차량 → Edge)
 
-`GET {downloadUrl}` · OTA 서버 API 아님 · 인증 헤더 없음
+`GET {downloadUrl}` · OTA 서버 API 아님 · 인증 헤더 없음, **[Phase2]** URL 서명(`md5`, `expires`)으로 검증
 
 - 응답 `application/octet-stream`, 헤더 `X-Cache-Status: HIT | MISS`.
+- **[Phase2] Edge의 서명 검증** (nginx `secure_link`)
+  1. URL의 `expires`, 경로, 자기가 가진 비밀 값으로 MD5를 다시 계산해 `md5`와 비교한다. 다르면 `403`.
+  2. `expires`가 지났으면 `410`.
+  3. 둘 다 통과해야 캐시를 본다. 캐시 HIT여도 서명이 틀리면 받을 수 없다.
+  - OTA 서버나 DB에 묻지 않고 비밀 값과 계산만으로 끝난다. 서버가 잠깐 죽어도 이미 발급된 URL로는 다운로드된다.
+  - 만료는 요청을 시작할 때만 본다. 받는 도중 만료돼도 끊기지 않고, 만료 뒤의 이어받기(Range) 요청은 `410`이다.
+  - 차량이 누구인지, 파일 내용이 맞는지는 보지 않는다. 파일 무결성은 차량이 SHA-256으로 확인한다(⑦).
+
+```nginx
+location /firmware/ {
+    secure_link     $arg_md5,$arg_expires;
+    secure_link_md5 "$secure_link_expires$uri $cdn_secret";   # $cdn_secret은 Secret에서 주입
+
+    if ($secure_link = "")  { return 403; }   # 서명 불일치
+    if ($secure_link = "0") { return 410; }   # 만료
+
+    proxy_cache_key $uri;                      # 쿼리스트링(md5, expires) 제외
+    proxy_pass      https://{bucket}.s3.{region}.amazonaws.com$uri;   # S3에는 쿼리스트링을 넘기지 않음
+}
+```
+
+- **[Phase2]** 캐시 키에 쿼리스트링을 넣으면 요청마다 `md5`·`expires`가 달라 캐시 항목이 따로 생긴다(적중률 0, S3 요청 증가). 반드시 경로만 키로 쓴다.
 - Edge는 Pod별 `proxy_cache`를 쓰고, MISS면 S3에서 받아 저장한 뒤 응답한다. Edge끼리 캐시를 공유하지 않는다.
 - **[Phase2] Edge → S3 설정**
-  - `proxy_pass https://{bucket}.s3.{region}.amazonaws.com;`, `proxy_set_header Host {bucket}.s3.{region}.amazonaws.com;`, `proxy_ssl_server_name on;`
-  - `/firmware/...` 경로를 그대로 S3 키로 넘긴다.
+  - `proxy_pass https://{bucket}.s3.{region}.amazonaws.com$uri;`, `proxy_set_header Host {bucket}.s3.{region}.amazonaws.com;`, `proxy_ssl_server_name on;`
+  - `/firmware/...` 경로를 그대로 S3 키로 넘긴다. 서명 쿼리스트링은 넘기지 않는다.
   - `x-amz-*` 응답 헤더는 차량에 내려보내지 않는다 (`proxy_hide_header`).
   - S3는 `ListBucket` 권한이 없으면 없는 객체에 `404` 대신 `403`을 준다. Edge가 S3의 `403`을 `404`로 바꿔 응답한다 (`proxy_intercept_errors`).
   - 오류 응답은 캐시하지 않는다 (`200`만 `proxy_cache_valid`).
 
 | HTTP | 상황 | 차량 동작 |
 |---|---|---|
+| 403 | **[Phase2]** 서명 불일치 (Edge가 S3에 가기 전에 응답) | 매니페스트를 다시 요청해 새 URL로 재시도 (다른 Edge도 같으므로 전환하지 않음) |
+| 410 | **[Phase2]** URL 만료 | 매니페스트를 다시 요청해 새 URL로 재시도 |
 | 404 | S3에도 파일 없음 | 실패 처리, 다음 체크인에 `DOWNLOAD_FAILED` (다른 Edge도 같으므로 전환하지 않음) |
 | 502, 504 | Edge → S3 오류 | 같은 Edge에 재시도 |
 | 연결 실패·타임아웃, 5xx 재시도 초과 | Edge 장애 | **[Phase2]** `fallbackUrls`의 다음 Edge로 전환 |
 
 - 모든 URL이 실패하면 매니페스트를 다시 요청한다(서버가 그 사이 장애 Edge를 뺐을 수 있음). 그래도 실패하면 `DOWNLOAD_FAILED`.
+- **[Phase2]** `403`/`410`으로 매니페스트를 다시 받은 뒤에도 같은 오류면 재요청을 반복하지 않고 `DOWNLOAD_FAILED`로 끝낸다 (비밀 값 불일치 같은 설정 오류).
+- **[Phase2]** 다운로드를 시작하기 전에 `urlExpiresAt`이 지났으면 매니페스트를 먼저 다시 요청한다.
 - 실제로 받은 Edge의 `edgeId`를 기억해 결과 보고 때 보낸다.
 
 ### ⑦ 검증 · 설치 (차량)
-
-Phase1과 같다.
 
 1. 받은 크기 == `fileSize`, SHA-256 == `sha256`.
 2. 실패하면 재시도하거나 매니페스트를 다시 요청. 계속 실패하면 업데이트 실패.
@@ -289,7 +323,7 @@ Phase1과 같다.
 
 ### ⑧ 대시보드 (프론트엔드)
 
-SSE를 먼저 연결하고 스냅샷을 받는다. SSE 동작(변경분 조회, `Last-Event-ID`, 겹침 시간)은 Phase1과 같다.
+SSE를 먼저 연결하고 스냅샷을 받는다. SSE 동작(변경분 조회, `Last-Event-ID`, 겹침 시간)은 그대로다.
 
 - `GET /api/v1/dashboard/vehicles/stream` (SSE), `GET /api/v1/dashboard/vehicles` (스냅샷)
 - 공통 차량 필드: `vehicleId`, `model`, `currentVersion`, `campaignId`, `lastResult`, `failureReason`, `lastSeenAt`, `updatedAt`
@@ -314,6 +348,7 @@ stateDiagram-v2
     매니페스트 --> 체크인: 404 / 409 / 410 / 503 NO_AVAILABLE_EDGE
     다운로드 --> 다운로드: Edge 장애 → 다음 fallbackUrl
     다운로드 --> 매니페스트: 모든 Edge 실패 (1회)
+    다운로드 --> 매니페스트: 403 서명 불일치 / 410 만료 (1회)
     다운로드 --> 검증: 200
     다운로드 --> 결과보고대기: 404 / 재시도 초과 (DOWNLOAD_FAILED)
     검증 --> 설치: 크기·해시 OK
@@ -353,7 +388,7 @@ stateDiagram-v2
 | 차량 (그 외) | `Bearer {vehicle-token}`, 토큰 차량 ≠ 경로 `vehicleId`면 `403` |
 | 관리자 / 프론트엔드 | `Bearer {admin-token}` |
 | SSE | `Bearer {admin-token}`, fetch 기반 SSE |
-| CDN Edge | 인증 없음 (내부 대역 제한). 서명 URL을 쓰면 모든 Edge가 같은 비밀 값으로 검증해야 한다 (§7) |
+| 차량 → CDN Edge | **[Phase2]** 서명 URL (`md5`, `expires`). OTA 서버가 발급하고 Edge가 nginx `secure_link`로 검증. 모든 Edge와 OTA 서버가 같은 비밀 값을 쓰며, 비밀 값은 Vault → k8s Secret으로 주입 (ConfigMap에 두지 않음) |
 | OTA 서버 → S3 | IAM 자격 증명 (`s3:PutObject`, 해당 버킷의 `firmware/*`만) |
 | Edge → S3 | 자격 증명 없음. 버킷 정책 `aws:SourceIp`로 Edge 출구 IP만 `s3:GetObject` 허용 |
 | OTA 서버 → RDS | DB 사용자·비밀번호. RDS 보안 그룹에서 서버 출구 IP만 3306 허용 |
@@ -379,9 +414,7 @@ stateDiagram-v2
 | `default-edge-id` | `edge-seoul` |
 | 거리 계산 방식 | Haversine. 도로 거리·네트워크 지연은 보지 않는다 |
 | Edge 부하 고려 여부 | Phase2는 거리만 본다. 한 Edge 몰림은 Edge replica·HPA로 대응 |
-| 클러스터 ↔ AWS 연결 방식 | 클러스터가 온프레미스(ASTRA)면 인터넷으로 RDS·S3에 붙는다. RDS 퍼블릭 접근 + 보안 그룹 IP 제한(간단) 또는 Site-to-Site VPN(안전) 중 선택. 고정 공인 IP가 있어야 IP 제한이 된다 |
-| RDS 지연 영향 | 온프레미스 → RDS 왕복 지연이 체크인 처리량·Hikari 대기에 직접 영향. Phase1 서버 HPA 결과(`T_db`)를 다시 잰다 |
-| RDS 인스턴스 클래스 | `max_connections` ≥ 서버 최대 Pod 수 × Hikari pool 이 되도록 선택 |
-| S3 리전·버킷 이름 | `ap-northeast-2` (제안). 버킷 버전 관리 켜서 실수로 덮어쓴 파일 복구 |
-| IAM 키·DB 비밀번호 보관 | k8s Secret 또는 Vault ([전체구성.md](전체구성.md)) |
-| CDN 서명 URL·Ed25519 서명 | Phase1에서 미룬 항목. 하게 되면 서명 비밀 값을 Vault에 두고 모든 Edge에 같은 값 배포 |
+| Origin 위치 | 클러스터 안 또는 밖 nginx — [전체구성.md](전체구성.md) 확정에 따름 |
+| 서명 URL 유효 기간 (`signed-url-ttl`) | 1시간. 재시도와 fallback까지 포함해 다운로드가 끝날 시간보다 길게 |
+| 서명 비밀 값 교체 | 교체하는 동안 Edge가 이전 값과 새 값을 모두 허용하고, 서버를 새 값으로 바꾼 뒤 이전 값을 뺀다. 구체 절차는 협의 |
+| Ed25519 파일 서명 | 미룬 항목. 파일 무결성은 매니페스트의 SHA-256으로 확인한다 |
