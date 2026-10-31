@@ -414,7 +414,6 @@ stateDiagram-v2
 | `default-edge-id` | `edge-seoul` |
 | 거리 계산 방식 | Haversine. 도로 거리·네트워크 지연은 보지 않는다 |
 | Edge 부하 고려 여부 | Phase2는 거리만 본다. 한 Edge 몰림은 Edge replica·HPA로 대응 |
-| Origin 위치 | 클러스터 안 또는 밖 nginx — [전체구성.md](전체구성.md) 확정에 따름 |
 | 서명 URL 유효 기간 (`signed-url-ttl`) | 1시간. 재시도와 fallback까지 포함해 다운로드가 끝날 시간보다 길게 |
 | 서명 비밀 값 교체 | 교체하는 동안 Edge가 이전 값과 새 값을 모두 허용하고, 서버를 새 값으로 바꾼 뒤 이전 값을 뺀다. 구체 절차는 협의 |
 | Ed25519 파일 서명 | 미룬 항목. 파일 무결성은 매니페스트의 SHA-256으로 확인한다 |
