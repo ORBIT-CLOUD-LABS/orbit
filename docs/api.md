@@ -87,3 +87,4 @@ Notion 쪽 설명도 flow.md에 맞춰 수정해야 한다.
 | `vehicle_event` 테이블 설계 | 차량 업데이트 이력 | [server#24](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/24) |
 
 그 밖의 협의 항목(차량 토큰 만료, 체크인 주기, 롤백 방식 등)은 [flow.md §7](flow.md#7-협의-필요-항목)을 따른다.
+
