@@ -24,7 +24,8 @@
 AWS (관리형): S3 (펌웨어 Origin), RDS (DB) — flow.md 기준, §5 참고
 ```
 
-- k8s 클러스터: control plane `polaris` 1대 + worker `sol`, `terra`, `luna` 3대.
+- k3s 클러스터: control plane `polaris` 1대 + worker `sol`, `terra`, `luna` 3대.
+- 배포판: k3s (`v1.35.9+k3s1`, Cilium CNI, 설치는 `orbit-infrastructure/ansible/roles/k3s`). 이 문서의 "k8s"는 일반 명칭이며, kubeadm 클러스터가 아니다.
 - `astra`는 클러스터 밖에 두고 게이트웨이(NAT, nginx), Vault, 모니터링 VM을 맡는다.
 - `io`는 부하 발생기 전용. 클러스터에 넣지 않는다.
 
