@@ -6,7 +6,7 @@
 - 수정일: 2026-11-02
 - 구현 추적: [orbit-server#25](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/25)
 
-orbit-server가 구현할 API를 한 곳에 모은 목록이다. 요청·응답 필드와 처리 순서는 flow.md의 각 단계를 따른다.
+orbit-server가 구현할 API를 한 곳에 모은 목록이다. API별 요청·응답 형식은 [api-spec.md](api-spec.md)에, 처리 순서는 flow.md의 각 단계에 있다.
 Notion과 flow.md가 다르면 flow.md를 기준으로 한다 (§5 참고).
 
 구현 상태 표기
