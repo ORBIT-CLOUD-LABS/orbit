@@ -1,9 +1,9 @@
 # API 명세 (요청·응답 형식)
 
-- 근거: [flow.md](flow.md) (Phase2), [api.md](api.md) (API 목록·구현 상태), orbit-server `develop` 브랜치의 요청·응답 DTO
+- 근거: [flow.md](flow.md) (Phase2), [api.md](api.md) (API 목록·구현 상태), orbit-server `develop` 브랜치의 요청·응답 DTO, 공통 응답 형식([server#82](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/82), [server#83](https://github.com/ORBIT-CLOUD-LABS/orbit-server/pull/83))
 - 상태: 설계중 (v2)
 - 작성일: 2026-11-02
-- 수정일: 2026-11-02
+- 수정일: 2026-11-03
 
 API별 요청·응답 형식을 정리한 문서다. API 목록과 구현 상태, 구현 Issue는 [api.md](api.md)에 둔다.
 
@@ -32,15 +32,54 @@ API별 요청·응답 형식을 정리한 문서다. API 목록과 구현 상태
 | 차량 (체크인, 매니페스트) | `Authorization: Bearer {vehicle-token}` | `401 UNAUTHORIZED`(토큰 없음·폐기·틀림), `403 VEHICLE_MISMATCH`(토큰 차량 ≠ 경로 `vehicleId`) |
 | 관리자, 대시보드 | `Authorization: Bearer {admin-token}` | `401 AUTHENTICATION_REQUIRED` |
 
-### 오류 응답
+### 응답 형식
 
-모든 오류는 같은 형식이다.
+모든 JSON 응답은 성공과 실패 모두 같은 형식으로 감싼다.
 
 ```json
-{ "code": "ARTIFACT_VERSION_EXISTS", "message": "같은 차종과 버전의 파일이 이미 등록되어 있습니다." }
+{
+  "isSuccess": true,
+  "code": "OK",
+  "message": "요청에 성공했습니다.",
+  "data": { "...": "API별 응답 본문" },
+  "error": null
+}
 ```
 
-- `code`로 분기하고 `message`는 사람이 읽는 용도로만 쓴다 (문구는 바뀔 수 있다).
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `isSuccess` | boolean | 요청 성공 여부 |
+| `code` | string | 성공이면 성공 코드(아래 표), 실패면 오류 코드 |
+| `message` | string | 사람이 읽는 설명. 분기는 `code`로 한다 (문구는 바뀔 수 있다) |
+| `data` | object | 성공 시 API별 응답 본문. 실패 시 `null` |
+| `error` | object | 오류 상세를 위한 자리. 지금은 항상 `null` |
+
+- HTTP 상태는 응답 상태 코드로 전달한다. 본문에 따로 넣지 않는다.
+- 이 문서의 API별 응답 필드 표는 `data` 안의 필드를 설명한다.
+- 대시보드 SSE 스트림(§3.2, `text/event-stream`)은 감싸지 않는다. CDN Edge 파일 다운로드(§2.4)도 OTA 서버 응답이 아니라 해당하지 않는다.
+
+성공 코드
+
+| HTTP | code | message |
+|---|---|---|
+| 200 | `OK` | 요청에 성공했습니다. |
+| 201 | `CREATED` | 리소스를 생성했습니다. |
+
+### 오류 응답
+
+오류도 같은 형식이다. `isSuccess`는 `false`, `data`와 `error`는 `null`이다.
+
+```json
+{
+  "isSuccess": false,
+  "code": "ARTIFACT_VERSION_EXISTS",
+  "message": "같은 차종과 버전의 파일이 이미 등록되어 있습니다.",
+  "data": null,
+  "error": null
+}
+```
+
+- 인증·인가 실패(401, 403)도 같은 형식이다.
 
 모든 API에 공통으로 생길 수 있는 오류
 
@@ -86,11 +125,17 @@ curl -X POST http://{ota-server}/api/v1/admin/artifacts \
 
 ```json
 {
-  "artifactId": 12,
-  "fileSize": 20971520,
-  "sha256": "a80ed4b4...",
-  "path": "/firmware/MODEL-A/1.1.0/firmware.bin",
-  "keyId": "v1"
+  "isSuccess": true,
+  "code": "CREATED",
+  "message": "리소스를 생성했습니다.",
+  "data": {
+    "artifactId": 12,
+    "fileSize": 20971520,
+    "sha256": "a80ed4b4...",
+    "path": "/firmware/MODEL-A/1.1.0/firmware.bin",
+    "keyId": "v1"
+  },
+  "error": null
 }
 ```
 
@@ -124,18 +169,24 @@ curl -X POST http://{ota-server}/api/v1/admin/artifacts \
 
 ```json
 {
-  "artifacts": [
-    {
-      "artifactId": 12,
-      "model": "MODEL-A",
-      "version": "1.1.0",
-      "fileSize": 20971520,
-      "sha256": "a80ed4b4...",
-      "path": "/firmware/MODEL-A/1.1.0/firmware.bin",
-      "keyId": "v1",
-      "createdAt": "2026-10-28T09:00:00Z"
-    }
-  ]
+  "isSuccess": true,
+  "code": "OK",
+  "message": "요청에 성공했습니다.",
+  "data": {
+    "artifacts": [
+      {
+        "artifactId": 12,
+        "model": "MODEL-A",
+        "version": "1.1.0",
+        "fileSize": 20971520,
+        "sha256": "a80ed4b4...",
+        "path": "/firmware/MODEL-A/1.1.0/firmware.bin",
+        "keyId": "v1",
+        "createdAt": "2026-10-28T09:00:00Z"
+      }
+    ]
+  },
+  "error": null
 }
 ```
 
@@ -145,18 +196,24 @@ curl -X POST http://{ota-server}/api/v1/admin/artifacts \
 
 `GET /api/v1/admin/artifacts/{artifactId}` · admin-token · 성공 `200`
 
-응답 `200`: 목록의 항목 하나와 같은 형식 (**[Phase2]** `keyId` 포함, `signature` 없음).
+응답 `200`: `data`는 목록의 항목 하나와 같은 형식 (**[Phase2]** `keyId` 포함, `signature` 없음).
 
 ```json
 {
-  "artifactId": 12,
-  "model": "MODEL-A",
-  "version": "1.1.0",
-  "fileSize": 20971520,
-  "sha256": "a80ed4b4...",
-  "path": "/firmware/MODEL-A/1.1.0/firmware.bin",
-  "keyId": "v1",
-  "createdAt": "2026-10-28T09:00:00Z"
+  "isSuccess": true,
+  "code": "OK",
+  "message": "요청에 성공했습니다.",
+  "data": {
+    "artifactId": 12,
+    "model": "MODEL-A",
+    "version": "1.1.0",
+    "fileSize": 20971520,
+    "sha256": "a80ed4b4...",
+    "path": "/firmware/MODEL-A/1.1.0/firmware.bin",
+    "keyId": "v1",
+    "createdAt": "2026-10-28T09:00:00Z"
+  },
+  "error": null
 }
 ```
 
@@ -200,7 +257,13 @@ curl -X POST http://{ota-server}/api/v1/admin/artifacts \
 응답 `201`
 
 ```json
-{ "campaignId": 7 }
+{
+  "isSuccess": true,
+  "code": "CREATED",
+  "message": "리소스를 생성했습니다.",
+  "data": { "campaignId": 7 },
+  "error": null
+}
 ```
 
 오류
@@ -224,18 +287,24 @@ curl -X POST http://{ota-server}/api/v1/admin/artifacts \
 
 ```json
 {
-  "campaigns": [
-    {
-      "campaignId": 7,
-      "name": "MODEL-A 1.1.0 배포",
-      "model": "MODEL-A",
-      "targetVersion": "1.1.0",
-      "status": "ACTIVE",
-      "startAt": "2026-10-28T00:00:00Z",
-      "endAt": "2026-11-28T00:00:00Z",
-      "createdAt": "2026-10-27T09:00:00Z"
-    }
-  ]
+  "isSuccess": true,
+  "code": "OK",
+  "message": "요청에 성공했습니다.",
+  "data": {
+    "campaigns": [
+      {
+        "campaignId": 7,
+        "name": "MODEL-A 1.1.0 배포",
+        "model": "MODEL-A",
+        "targetVersion": "1.1.0",
+        "status": "ACTIVE",
+        "startAt": "2026-10-28T00:00:00Z",
+        "endAt": "2026-11-28T00:00:00Z",
+        "createdAt": "2026-10-27T09:00:00Z"
+      }
+    ]
+  },
+  "error": null
 }
 ```
 
@@ -269,11 +338,19 @@ curl -X POST http://{ota-server}/api/v1/admin/artifacts \
 
 ```json
 {
-  "vehicleId": "VH-0001",
-  "vehicleToken": "vt_...",
-  "issuedAt": "2026-10-28T09:00:00Z"
+  "isSuccess": true,
+  "code": "CREATED",
+  "message": "리소스를 생성했습니다.",
+  "data": {
+    "vehicleId": "VH-0001",
+    "vehicleToken": "vt_...",
+    "issuedAt": "2026-10-28T09:00:00Z"
+  },
+  "error": null
 }
 ```
+
+- 처음 등록은 `201 CREATED`, 재등록은 `200 OK`다. `data` 형식은 같다.
 
 - `vehicleToken` 원문은 이 응답에서 한 번만 내려준다. 이전 토큰은 폐기된다.
 
@@ -327,11 +404,23 @@ curl -X POST http://{ota-server}/api/v1/admin/artifacts \
 응답 `200`
 
 ```json
-{ "updateTarget": false, "nextCheckInSeconds": 30 }
+{
+  "isSuccess": true,
+  "code": "OK",
+  "message": "요청에 성공했습니다.",
+  "data": { "updateTarget": false, "nextCheckInSeconds": 30 },
+  "error": null
+}
 ```
 
 ```json
-{ "updateTarget": true, "campaignId": 7, "nextCheckInSeconds": 30 }
+{
+  "isSuccess": true,
+  "code": "OK",
+  "message": "요청에 성공했습니다.",
+  "data": { "updateTarget": true, "campaignId": 7, "nextCheckInSeconds": 30 },
+  "error": null
+}
 ```
 
 | 필드 | 타입 | 설명 |
@@ -363,19 +452,25 @@ curl -X POST http://{ota-server}/api/v1/admin/artifacts \
 
 ```json
 {
-  "campaignId": 7,
-  "targetVersion": "1.1.0",
-  "fileSize": 20971520,
-  "sha256": "a80ed4b4...",
-  "edge": { "edgeId": "edge-seoul", "distanceKm": 3.2 },
-  "downloadUrl": "http://192.168.100.102:30081/firmware/MODEL-A/1.1.0/firmware.bin?md5=Xb3kQ9...&expires=1761649200",
-  "fallbackUrls": [
-    { "edgeId": "edge-daejeon", "url": "http://192.168.100.102:30082/firmware/MODEL-A/1.1.0/firmware.bin?md5=Xb3kQ9...&expires=1761649200" },
-    { "edgeId": "edge-busan", "url": "http://192.168.100.102:30083/firmware/MODEL-A/1.1.0/firmware.bin?md5=Xb3kQ9...&expires=1761649200" }
-  ],
-  "urlExpiresAt": "2026-10-28T11:00:00Z",
-  "signature": "Kx8f2...",
-  "keyId": "v1"
+  "isSuccess": true,
+  "code": "OK",
+  "message": "요청에 성공했습니다.",
+  "data": {
+    "campaignId": 7,
+    "targetVersion": "1.1.0",
+    "fileSize": 20971520,
+    "sha256": "a80ed4b4...",
+    "edge": { "edgeId": "edge-seoul", "distanceKm": 3.2 },
+    "downloadUrl": "http://192.168.100.102:30081/firmware/MODEL-A/1.1.0/firmware.bin?md5=Xb3kQ9...&expires=1761649200",
+    "fallbackUrls": [
+      { "edgeId": "edge-daejeon", "url": "http://192.168.100.102:30082/firmware/MODEL-A/1.1.0/firmware.bin?md5=Xb3kQ9...&expires=1761649200" },
+      { "edgeId": "edge-busan", "url": "http://192.168.100.102:30083/firmware/MODEL-A/1.1.0/firmware.bin?md5=Xb3kQ9...&expires=1761649200" }
+    ],
+    "urlExpiresAt": "2026-10-28T11:00:00Z",
+    "signature": "Kx8f2...",
+    "keyId": "v1"
+  },
+  "error": null
 }
 ```
 
@@ -408,7 +503,7 @@ curl -X POST http://{ota-server}/api/v1/admin/artifacts \
 `GET {downloadUrl}` · CDN Edge가 처리 · 인증 헤더 없음 (**[Phase2]** URL 서명으로 검증)
 
 - 응답 `200`, `application/octet-stream`, 헤더 `X-Cache-Status: HIT | MISS`.
-- 오류는 nginx 응답이며 위 공통 오류 형식(JSON)이 아니다. 상태 코드로만 판단한다.
+- 오류는 nginx 응답이며 위 공통 응답 형식(JSON)이 아니다. 상태 코드로만 판단한다.
 
 | HTTP | 상황 | 차량 동작 |
 |---|---|---|
@@ -422,7 +517,7 @@ curl -X POST http://{ota-server}/api/v1/admin/artifacts \
 
 ### 차량 상태 객체
 
-스냅샷, 스트림, 차량 상세가 같은 차량 객체를 쓴다.
+스냅샷, 스트림, 차량 상세가 같은 차량 객체를 쓴다. 공통 응답 형식으로 감싸기 전의 객체 하나다.
 
 ```json
 {
@@ -460,8 +555,14 @@ curl -X POST http://{ota-server}/api/v1/admin/artifacts \
 
 ```json
 {
-  "asOf": "2026-10-28T10:00:31.123Z",
-  "vehicles": [ { "vehicleId": "VH-0001", "...": "차량 상태 객체" } ]
+  "isSuccess": true,
+  "code": "OK",
+  "message": "요청에 성공했습니다.",
+  "data": {
+    "asOf": "2026-10-28T10:00:31.123Z",
+    "vehicles": [ { "vehicleId": "VH-0001", "...": "차량 상태 객체" } ]
+  },
+  "error": null
 }
 ```
 
@@ -487,6 +588,7 @@ data: [{"vehicleId":"VH-0001","model":"MODEL-A", ... }]
 : keep-alive
 ```
 
+- SSE 이벤트는 공통 응답 형식으로 감싸지 않는다. 연결 전에 실패한 오류 응답(아래)만 공통 형식이다.
 - `event: vehicles`의 `data`는 바뀐 차량 상태 객체 배열이다 (전체가 아니라 변경분).
 - `id`는 조회 기준 시각이다. 재연결할 때 `Last-Event-ID`로 보낸다.
 - 같은 변경이 두 번 올 수 있다. 차량별로 `updatedAt`이 늦은 쪽을 쓴다.
@@ -500,19 +602,25 @@ data: [{"vehicleId":"VH-0001","model":"MODEL-A", ... }]
 
 ```json
 {
-  "edges": [
-    {
-      "edgeId": "edge-seoul",
-      "name": "서울",
-      "latitude": 37.5665,
-      "longitude": 126.9780,
-      "healthy": true,
-      "assignedVehicles": 42,
-      "downloads": [
-        { "campaignId": 7, "succeeded": 40, "failed": 2 }
-      ]
-    }
-  ]
+  "isSuccess": true,
+  "code": "OK",
+  "message": "요청에 성공했습니다.",
+  "data": {
+    "edges": [
+      {
+        "edgeId": "edge-seoul",
+        "name": "서울",
+        "latitude": 37.5665,
+        "longitude": 126.9780,
+        "healthy": true,
+        "assignedVehicles": 42,
+        "downloads": [
+          { "campaignId": 7, "succeeded": 40, "failed": 2 }
+        ]
+      }
+    ]
+  },
+  "error": null
 }
 ```
 
@@ -534,36 +642,44 @@ data: [{"vehicleId":"VH-0001","model":"MODEL-A", ... }]
 
 ```json
 {
-  "campaignId": 7,
-  "name": "MODEL-A 1.1.0 배포",
-  "artifactId": 12,
-  "targetVersion": "1.1.0",
-  "target": {
-    "model": "MODEL-A",
-    "hwVersions": ["HW1", "HW2"],
-    "regions": ["KR"],
-    "currentVersionMin": "1.0.0",
-    "currentVersionMax": "1.0.9"
+  "isSuccess": true,
+  "code": "OK",
+  "message": "요청에 성공했습니다.",
+  "data": {
+    "campaignId": 7,
+    "name": "MODEL-A 1.1.0 배포",
+    "artifactId": 12,
+    "targetVersion": "1.1.0",
+    "target": {
+      "model": "MODEL-A",
+      "hwVersions": ["HW1", "HW2"],
+      "regions": ["KR"],
+      "currentVersionMin": "1.0.0",
+      "currentVersionMax": "1.0.9"
+    },
+    "status": "ACTIVE",
+    "startAt": "2026-10-28T00:00:00Z",
+    "endAt": "2026-11-28T00:00:00Z",
+    "createdAt": "2026-10-27T09:00:00Z"
   },
-  "status": "ACTIVE",
-  "startAt": "2026-10-28T00:00:00Z",
-  "endAt": "2026-11-28T00:00:00Z",
-  "createdAt": "2026-10-27T09:00:00Z"
+  "error": null
 }
 ```
 
-- 등록 요청과 같은 모양에 `campaignId`, `status`, `createdAt`을 더한다.
+- `data`는 등록 요청과 같은 모양에 `campaignId`, `status`, `createdAt`을 더한다.
 - 오류: `404 CAMPAIGN_NOT_FOUND`
 
 ### 4.2 캠페인 비활성화 — **[제안]**, 미구현
 
 `PATCH /api/v1/admin/campaigns/{campaignId}` · admin-token · 성공 `200`
 
+요청
+
 ```json
 { "status": "INACTIVE" }
 ```
 
-- 응답은 캠페인 상세와 같은 형식.
+- 응답은 캠페인 상세와 같은 형식 (`data`에 캠페인 상세).
 - `INACTIVE → ACTIVE`를 허용할지는 [server#20](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/20)에서 정한다.
 - 오류: `400 INVALID_INPUT`(정의되지 않은 `status`), `404 CAMPAIGN_NOT_FOUND`
 
@@ -573,18 +689,24 @@ data: [{"vehicleId":"VH-0001","model":"MODEL-A", ... }]
 
 ```json
 {
-  "campaignId": 7,
-  "targetVehicles": 100,
-  "succeeded": 80,
-  "failed": 5,
-  "failureReasons": {
-    "DOWNLOAD_FAILED": 2,
-    "HASH_MISMATCH": 0,
-    "SIGNATURE_INVALID": 1,
-    "DOWNGRADE_REJECTED": 0,
-    "INSTALL_FAILED": 2
+  "isSuccess": true,
+  "code": "OK",
+  "message": "요청에 성공했습니다.",
+  "data": {
+    "campaignId": 7,
+    "targetVehicles": 100,
+    "succeeded": 80,
+    "failed": 5,
+    "failureReasons": {
+      "DOWNLOAD_FAILED": 2,
+      "HASH_MISMATCH": 0,
+      "SIGNATURE_INVALID": 1,
+      "DOWNGRADE_REJECTED": 0,
+      "INSTALL_FAILED": 2
+    },
+    "inProgress": 15
   },
-  "inProgress": 15
+  "error": null
 }
 ```
 
@@ -597,27 +719,33 @@ data: [{"vehicleId":"VH-0001","model":"MODEL-A", ... }]
 
 ```json
 {
-  "vehicleId": "VH-0001",
-  "model": "MODEL-A",
-  "hwVersion": "HW1",
-  "region": "KR",
-  "currentVersion": "1.0.0",
-  "lastSeenAt": "2026-10-28T10:00:30Z",
-  "updatedAt": "2026-10-28T10:00:30Z",
-  "location": { "latitude": 37.5665, "longitude": 126.9780, "updatedAt": "2026-10-28T10:00:30Z" },
-  "assignedEdgeId": "edge-seoul",
-  "lastUpdate": {
-    "campaignId": 7,
-    "result": "FAILED",
-    "failureReason": "SIGNATURE_INVALID",
-    "failureDetail": "unknown keyId: v2",
-    "edgeId": "edge-seoul",
-    "finishedAt": "2026-10-28T10:00:00Z"
-  }
+  "isSuccess": true,
+  "code": "OK",
+  "message": "요청에 성공했습니다.",
+  "data": {
+    "vehicleId": "VH-0001",
+    "model": "MODEL-A",
+    "hwVersion": "HW1",
+    "region": "KR",
+    "currentVersion": "1.0.0",
+    "lastSeenAt": "2026-10-28T10:00:30Z",
+    "updatedAt": "2026-10-28T10:00:30Z",
+    "location": { "latitude": 37.5665, "longitude": 126.9780, "updatedAt": "2026-10-28T10:00:30Z" },
+    "assignedEdgeId": "edge-seoul",
+    "lastUpdate": {
+      "campaignId": 7,
+      "result": "FAILED",
+      "failureReason": "SIGNATURE_INVALID",
+      "failureDetail": "unknown keyId: v2",
+      "edgeId": "edge-seoul",
+      "finishedAt": "2026-10-28T10:00:00Z"
+    }
+  },
+  "error": null
 }
 ```
 
-- 차량 상태 객체에 `hwVersion`, `region`과 마지막 결과의 `failureDetail`, `finishedAt`을 더한다. 결과가 없으면 `lastUpdate`는 `null`.
+- `data`는 차량 상태 객체에 `hwVersion`, `region`과 마지막 결과의 `failureDetail`, `finishedAt`을 더한다. 결과가 없으면 `lastUpdate`는 `null`.
 - 오류: `404` (code는 구현 Issue에서 정한다. 예: `VEHICLE_NOT_FOUND`)
 
 ### 4.5 차량 업데이트 이력 — 미정
@@ -632,3 +760,4 @@ data: [{"vehicleId":"VH-0001","model":"MODEL-A", ... }]
 |---|---|
 | `campaignId` 타입 | 서버는 숫자(Long)다. flow.md 예시의 `"cmp-20261028-001"`은 문자열이라 맞지 않는다. 이 문서는 서버 기준으로 숫자를 쓴다 |
 | 차량 에이전트 `campaignId` | orbit-vehicle-agent는 `campaignId`를 문자열로 받는다. 서버가 숫자를 보내므로 JSON 해석이 실패할 수 있다 (확인 필요) |
+| 차량 에이전트 응답 형식 | 서버는 응답 본문을 `data` 아래에 담는다(server#83). orbit-vehicle-agent는 아직 본문을 최상위에서 읽으므로 `data`에서 읽도록 바꿔야 한다 (별도 Issue) |
