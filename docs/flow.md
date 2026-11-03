@@ -2,19 +2,21 @@
 
 - 상태: 설계중 (v2)
 - 작성일: 2026-10-28
-- 핵심: **CDN Edge를 여러 개 두고, 차량 위치에서 가장 가까운 Edge에서 업데이트 파일을 받는다.** 새로 추가되거나 바뀐 곳은 `[Phase2]`로 표시했다.
+- 수정일: 2026-11-02 (펌웨어 서명 추가, #63)
+- 핵심: **CDN Edge를 여러 개 두고, 차량 위치에서 가장 가까운 Edge에서 업데이트 파일을 받는다. 차량은 설치 전에 펌웨어 서명으로 파일의 진위를 확인한다.** 새로 추가되거나 바뀐 곳은 `[Phase2]`로 표시했다.
 
 ## 0. 등장 주체
 
 | 주체 | 역할 |
 |---|---|
-| 관리자 | 업데이트 파일 등록, 캠페인 등록 |
-| OTA 서버 | 파일 메타데이터·캠페인·차량 상태 관리, 대상 판정, **[Phase2] 가까운 Edge 선택, 서명 URL 발급**, 매니페스트 발급, SSE 전송 |
+| 관리자 | **[Phase2] 펌웨어 서명(Vault)**, 업데이트 파일 등록, 캠페인 등록 |
+| OTA 서버 | 파일 메타데이터·캠페인·차량 상태 관리, 대상 판정, **[Phase2] 펌웨어 서명 검증(등록 시), 가까운 Edge 선택, URL 서명 발급**, 매니페스트 발급, SSE 전송 |
+| **[Phase2]** Vault | 펌웨어 서명 개인 키 보관과 서명 (Transit). 개인 키는 Vault 밖으로 나가지 않는다 |
 | Origin (**[Phase2] AWS S3**) | 업데이트 파일 원본 저장소. Edge가 MISS일 때 HTTPS로 가져간다 |
-| CDN Edge (nginx Pod) | **[Phase2] 지역별로 여러 개. 서명 URL 검증.** 차량에 파일 배포, 캐시 미스면 Origin에서 가져옴 |
-| 차량 | 등록, 주기적 체크인(**[Phase2] 위치 포함**), 다운로드·검증·설치, 결과 보고 |
-| 프론트엔드 | 대시보드 (스냅샷 + SSE) |
-| DB (**[Phase2] AWS RDS for MySQL 8**) | 기존 테이블 (**[Phase2]** 위치·Edge 컬럼 추가, §4) |
+| CDN Edge (nginx Pod) | **[Phase2] 지역별로 여러 개. URL 서명 검증.** 차량에 파일 배포, 캐시 미스면 Origin에서 가져옴 |
+| 차량 | 등록, 주기적 체크인(**[Phase2] 위치 포함**), 다운로드·검증(**[Phase2] 펌웨어 서명, 다운그레이드 거부**)·설치, 결과 보고 |
+| 프론트엔드 | 대시보드 (스냅샷 + SSE), 파일 등록 화면(**[Phase2]** 서명 입력) |
+| DB (**[Phase2] AWS RDS for MySQL 8**) | 기존 테이블 (**[Phase2]** 위치·Edge·서명 컬럼 추가, §4) |
 
 ### Edge 구성 (클러스터 안)
 
@@ -42,7 +44,7 @@ orbit:
     default-edge-id: edge-seoul      # 위치를 모를 때 쓰는 Edge
     fallback-count: 2                # fallbackUrls 개수
     location-max-age: 10m            # 이보다 오래된 위치는 쓰지 않음
-    signed-url-ttl: 1h               # 서명 URL 유효 기간 (서명 비밀 값은 ConfigMap이 아닌 Secret, §5)
+    signed-url-ttl: 1h               # URL 서명 유효 기간 (URL 서명 비밀 값은 ConfigMap이 아닌 Secret, §5)
     edges:
       - id: edge-seoul
         name: 서울
@@ -59,6 +61,9 @@ orbit:
         base-url: http://192.168.100.102:30083
         latitude: 35.1796
         longitude: 129.0756
+  signing:
+    public-keys:                     # [Phase2] 펌웨어 서명 공개 키 (keyId → base64 32바이트). 비밀 아님
+      v1: <Vault transit/keys/firmware-signing 의 버전 1 public_key>
 ```
 
 - 서버는 시작할 때 목록을 읽어 메모리에 둔다. `id` 중복, 좌표 범위(`-90~90`, `-180~180`), `default-edge-id`가 목록에 없음 → **서버 기동 실패**로 잘못된 설정을 바로 드러낸다.
@@ -79,12 +84,65 @@ orbit:
 - Edge가 S3를 직접 Origin으로 쓰므로 S3 요청에 서명(SigV4)을 붙이지 않는다. 그래서 버킷 정책의 IP 제한으로 Edge만 읽게 한다.
 - Edge 캐시가 S3 요청 수와 S3 → 인터넷 전송량(비용)을 줄인다. 캐시 효과 측정은 기존 CDN 실험과 같은 방식으로 한다.
 
+### [Phase2] 펌웨어 서명
+
+매니페스트의 `sha256`과 URL 서명(`md5`, `expires`)은 모두 OTA 서버를 믿는 전제다. OTA 서버가 장악되거나 공유 관리자 토큰이 유출되면 악성 파일을 등록하고 그 해시를 매니페스트에 넣을 수 있다.
+펌웨어 서명은 **서버 밖의 개인 키**로 만들고 차량이 직접 검증하므로, 서버를 믿지 않아도 파일의 진위를 확인할 수 있다.
+
+| 항목 | 값 |
+|---|---|
+| 알고리즘 | Ed25519 |
+| 개인 키 | Vault Transit 키 `firmware-signing` (`type=ed25519`, `exportable=false`). Vault 밖으로 나가지 않는다 |
+| 서명 주체 | 팀원 각자의 Vault 개인 계정 (정책 `firmware-signer`). OTA 서버는 서명하지 않고 검증만 한다 |
+| 공개 키 (서버) | ConfigMap `orbit.signing.public-keys` (`keyId → base64`). 공개 키는 비밀이 아니다 |
+| 공개 키 (차량) | 에이전트 바이너리에 포함(`go:embed`). 환경 변수·파일·서버로 바꿀 수 있는 경로를 두지 않는다 |
+| `keyId` | Vault 키 버전 (`v1`, `v2`, …) |
+
+**서명 대상** — 파일 전체가 아니라 아래 문자열에 서명한다. `sha256`이 파일 내용을 대표하고, `model`·`version`을 넣어 다른 차종·버전으로 바꿔치기하는 것을 막는다.
+
+```text
+orbit-firmware-v1
+{model}
+{version}
+{sha256}
+{fileSize}
+```
+
+- 다섯 줄을 `\n`으로 잇고 끝에 줄바꿈을 붙이지 않는다. `sha256`은 소문자 hex 64자, `fileSize`는 10진수 바이트.
+- `version`은 등록한 문자열 그대로 쓴다 (`1.0`과 `1.0.0`은 다른 서명).
+- 첫 줄 `orbit-firmware-v1`은 용도·형식 구분용이다. 형식을 바꾸면 `v2`로 올린다.
+
+**서명 절차** (관리자, ① 등록 전)
+
+```bash
+payload=$(printf 'orbit-firmware-v1\n%s\n%s\n%s\n%s' "$MODEL" "$VERSION" "$SHA256" "$SIZE")
+vault write -field=signature transit/sign/firmware-signing input=$(printf %s "$payload" | base64)
+# → vault:v1:<base64 서명>  →  keyId = v1, signature = <base64 서명>
+```
+
+- 서명·업로드 스크립트는 관리자 토큰과 Vault 인증 정보를 실행할 때 따로 입력받고 파일에 저장하지 않는다 (한 곳이 유출돼도 다른 하나는 안전하도록).
+- Vault 토큰은 서명할 때만 짧은 TTL로 발급받는다.
+- 대시보드 파일 등록 화면은 `signature`, `keyId` 입력을 받는다.
+- 운영 원칙: 실제 운영에서는 서명 권한자를 소수로 제한하고 등록 권한과 분리한다. 이 프로젝트는 팀원 전원이 개인 계정으로 서명한다 (공용 계정 금지).
+- Vault가 준비되기 전에는 로컬 테스트 키로 개발한다. 테스트 공개 키는 에이전트 운영 이미지에 넣지 않는다.
+
+**키 교체**
+
+1. 새 공개 키(`v2`)를 서버 ConfigMap과 에이전트(`keys/v2.pub`)에 추가해 배포한다. `v1`, `v2` 모두 허용.
+2. Vault 키를 rotate하고 `v2`로 서명을 시작한다.
+3. 배포 중인 파일 중 `v1` 서명만 있는 것은 `v2`로 다시 서명한다.
+4. 모든 차량이 `v2`를 가진 에이전트로 바뀐 뒤 `v1` 공개 키를 에이전트 → 서버 순으로 제거한다.
+
+- 서명은 만료되지 않는다. 차량이 해당 `keyId`의 공개 키를 가진 동안 계속 유효하다.
+- 개인 키 유출이 의심되면 위 절차로 교체하고 유출된 키의 공개 키를 제거한다. 제거 전까지는 그 키로 만든 서명이 통과한다.
+
 ## 1. 전체 흐름
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor Admin as 관리자
+    participant K as Vault
     participant S as OTA 서버
     participant DB as RDS (MySQL)
     participant O as S3 (Origin)
@@ -93,7 +151,10 @@ sequenceDiagram
     participant F as 대시보드
 
     Note over S: [P2] 기동 시 설정의 Edge 목록 로드, 주기적 헬스체크
-    Admin->>S: ① 파일 등록 (POST /admin/artifacts)
+    Admin->>K: [P2] 펌웨어 서명 (transit/sign, 개인 계정)
+    K-->>Admin: signature, keyId
+    Admin->>S: ① 파일 등록 (POST /admin/artifacts, [P2] signature, keyId)
+    S->>S: [P2] 공개 키로 펌웨어 서명 검증 (실패면 422)
     S->>O: [P2] PutObject (SHA-256 체크섬 포함)
     S->>DB: artifact 저장
     Admin->>S: ② 캠페인 등록 (POST /admin/campaigns)
@@ -112,10 +173,10 @@ sequenceDiagram
     S->>S: [P2] 차량 위치 → 가까운 정상 Edge 순으로 정렬
     S->>DB: [P2] vehicle_state.assigned_edge_id 기록
     S->>S: [P2] URL마다 서명(md5, expires) 생성
-    S-->>V: downloadUrl(가장 가까운 Edge), [P2] fallbackUrls, urlExpiresAt
+    S-->>V: downloadUrl(가장 가까운 Edge), [P2] fallbackUrls, urlExpiresAt, signature, keyId
 
     V->>E: ⑥ GET downloadUrl?md5=..&expires=..
-    E->>E: [P2] 서명·만료 검증 (실패면 403 / 410)
+    E->>E: [P2] URL 서명·만료 검증 (실패면 403 / 410)
     alt 캐시 HIT
         E-->>V: 파일 (X-Cache-Status: HIT)
     else 캐시 MISS
@@ -125,7 +186,7 @@ sequenceDiagram
     end
     Note over V,E: [P2] Edge 오류면 fallbackUrls 순서로 다음 Edge에서 받음
 
-    V->>V: ⑦ 크기·SHA-256 검증, 설치
+    V->>V: ⑦ 크기·SHA-256·[P2] 펌웨어 서명·버전 검증, 설치
     V->>S: 다음 체크인에 lastUpdate(결과, [P2] edgeId) 보고
 
     F->>S: ⑧ SSE 연결 후 스냅샷 조회
@@ -136,18 +197,21 @@ sequenceDiagram
 
 ### ① Origin 파일 등록 (관리자)
 
-API는 그대로이고 저장 위치만 S3로 바뀐다. `POST /api/v1/admin/artifacts` · `multipart/form-data` · `Bearer {admin-token}`
+**[Phase2]** 저장 위치가 S3로 바뀌고 펌웨어 서명을 함께 받는다. `POST /api/v1/admin/artifacts` · `multipart/form-data` · `Bearer {admin-token}`
 
-1. 관리자가 `file`, `model`, `version`, (선택) `sha256`을 올린다.
+1. 관리자가 `file`, `model`, `version`, (선택) `sha256`, **[Phase2]** `signature`, `keyId`를 올린다. 서명은 등록 전에 만든다 (§0 펌웨어 서명).
 2. 같은 `model + version`이 있으면 `409 ARTIFACT_VERSION_EXISTS` (S3에 올리기 전에 확인).
 3. OTA 서버가 SHA-256을 계산한다. 요청에 `sha256`이 있으면 비교한다 → 다르면 `422 HASH_MISMATCH`.
-4. **[Phase2]** S3에 `firmware/{model}/{version}/firmware.bin` 키로 올린다.
+4. **[Phase2]** 서명 문자열(`model`, `version`, 계산한 `sha256`, 파일 크기)을 만들고 `keyId`의 공개 키로 검증한다. `signature`·`keyId`가 없거나, 모르는 `keyId`이거나, 검증에 실패하면 `422 SIGNATURE_INVALID` (S3에 올리기 전에 확인).
+5. **[Phase2]** S3에 `firmware/{model}/{version}/firmware.bin` 키로 올린다.
    - `ChecksumAlgorithm=SHA256`을 붙여 S3가 받은 내용도 같은 해시인지 검증하게 한다.
    - 큰 파일은 SDK의 multipart upload로 올린다.
    - S3 오류·타임아웃이면 `502 ORIGIN_UPLOAD_FAILED` (관리자가 재시도).
-5. `artifact`에 저장하고 `201`로 `artifactId`, `fileSize`, `sha256`, `path`(`/firmware/{model}/{version}/firmware.bin`)를 돌려준다.
+6. `artifact`에 저장하고 `201`로 `artifactId`, `fileSize`, `sha256`, `path`(`/firmware/{model}/{version}/firmware.bin`), **[Phase2]** `keyId`를 돌려준다.
 
 - 등록한 파일은 수정하지 않는다. 버전마다 새 키를 쓴다.
+- **[Phase2]** 서버의 검증은 잘못된 서명이 등록되지 않게 미리 거르는 용도다. 서버가 장악되면 건너뛸 수 있으므로 최종 방어선은 차량의 검증(⑦)이다.
+- **[Phase2]** 파일 목록·상세 응답에는 `keyId`만 넣고 `signature`는 넣지 않는다. `signature`는 매니페스트(⑤)로만 내려준다.
 - S3 업로드는 됐는데 DB 저장이 실패하면 S3에 객체만 남는다. 같은 `model + version`으로 다시 등록하면 같은 키를 덮어쓰므로 정리하지 않아도 된다.
 - `artifact.path`는 URL 경로(`/firmware/...`), S3 키는 앞의 `/`를 뺀 값이다.
 - Edge에 미리 넣지(pre-warm) 않는다. 첫 다운로드에서 Edge별로 한 번 MISS가 난다.
@@ -218,6 +282,8 @@ API는 그대로이고 저장 위치만 S3로 바뀐다. `POST /api/v1/admin/art
 |---|---|
 | `DOWNLOAD_FAILED` | 모든 Edge(`downloadUrl` + `fallbackUrls`) 실패, 크기 불일치, 재시도 초과 |
 | `HASH_MISMATCH` | SHA-256 불일치 |
+| **[Phase2]** `SIGNATURE_INVALID` | 펌웨어 서명 검증 실패, 모르는 `keyId` (`failureDetail`에 원인, 예: `unknown keyId: v2`) |
+| **[Phase2]** `DOWNGRADE_REJECTED` | `targetVersion`이 현재 버전보다 낮거나 버전을 읽을 수 없음 |
 | `INSTALL_FAILED` | 설치 중 실패 |
 
 ### ⑤ 매니페스트 요청 · Edge 선택 (차량, 대상일 때)
@@ -232,7 +298,7 @@ API는 그대로이고 저장 위치만 S3로 바뀐다. `POST /api/v1/admin/art
    4. 위치가 없거나 너무 오래됐으면(`location_updated_at`이 `location-max-age` 초과) 기본 Edge(`default-edge-id`)를 첫 번째로 두고, 나머지는 설정 순서대로 둔다.
    5. 후보가 하나도 없으면 `503 NO_AVAILABLE_EDGE`. 차량은 다음 체크인에 다시 시도한다.
 3. **[Phase2]** 고른 Edge를 `vehicle_state.assigned_edge_id`에 기록한다 (대시보드에서 차량별 배정 Edge 표시용).
-4. **[Phase2] 서명 URL 생성**
+4. **[Phase2] URL 서명 생성**
    1. `expires` = 지금 + `signed-url-ttl`(기본 1시간), Unix 초.
    2. `md5` = `base64url(MD5("{expires}{artifact.path} {secret}"))`. 끝의 `=`는 뺀다.
    3. 모든 URL(`downloadUrl`, `fallbackUrls`)에 같은 `?md5={md5}&expires={expires}`를 붙인다.
@@ -251,14 +317,17 @@ API는 그대로이고 저장 위치만 S3로 바뀐다. `POST /api/v1/admin/art
     { "edgeId": "edge-daejeon", "url": "http://192.168.100.102:30082/firmware/MODEL-A/1.1.0/firmware.bin?md5=Xb3kQ9...&expires=1761649200" },
     { "edgeId": "edge-busan",   "url": "http://192.168.100.102:30083/firmware/MODEL-A/1.1.0/firmware.bin?md5=Xb3kQ9...&expires=1761649200" }
   ],
-  "urlExpiresAt": "2026-10-28T11:00:00Z"
+  "urlExpiresAt": "2026-10-28T11:00:00Z",
+  "signature": "Kx8f2...(base64, 64바이트)",
+  "keyId": "v1"
 }
 ```
 
 - URL은 `{edge.baseUrl}{artifact.path}?md5=..&expires=..`로 만든다. Edge마다 경로가 같으므로 `baseUrl`만 바꾼다.
-- **[Phase2]** 서명에는 host를 넣지 않고 경로만 넣는다. 그래서 같은 서명이 모든 Edge에서 통하고, 모든 Edge가 같은 비밀 값을 가져야 한다.
-- **[Phase2]** 서명은 차량별이 아니다. URL이 유출되면 만료 전까지는 누구나 받을 수 있으므로 유효 기간을 길게 잡지 않는다.
-- Edge 목록은 메모리에 있으므로 Edge 선택에 DB를 읽지 않는다. 서명 생성도 계산만 하므로 DB를 읽지 않는다.
+- **[Phase2]** URL 서명에는 host를 넣지 않고 경로만 넣는다. 그래서 같은 URL 서명이 모든 Edge에서 통하고, 모든 Edge가 같은 비밀 값을 가져야 한다.
+- **[Phase2]** URL 서명은 차량별이 아니다. URL이 유출되면 만료 전까지는 누구나 받을 수 있으므로 유효 기간을 길게 잡지 않는다.
+- **[Phase2]** `signature`, `keyId`는 등록 때 저장한 펌웨어 서명을 그대로 내려준다. URL 서명과 달리 요청마다 바뀌지 않는다.
+- Edge 목록은 메모리에 있으므로 Edge 선택에 DB를 읽지 않는다. URL 서명 생성도 계산만 하므로 DB를 읽지 않는다.
 
 ### [Phase2] Edge 헬스체크 (OTA 서버 내부, API 아님)
 
@@ -272,13 +341,13 @@ API는 그대로이고 저장 위치만 S3로 바뀐다. `POST /api/v1/admin/art
 `GET {downloadUrl}` · OTA 서버 API 아님 · 인증 헤더 없음, **[Phase2]** URL 서명(`md5`, `expires`)으로 검증
 
 - 응답 `application/octet-stream`, 헤더 `X-Cache-Status: HIT | MISS`.
-- **[Phase2] Edge의 서명 검증** (nginx `secure_link`)
+- **[Phase2] Edge의 URL 서명 검증** (nginx `secure_link`)
   1. URL의 `expires`, 경로, 자기가 가진 비밀 값으로 MD5를 다시 계산해 `md5`와 비교한다. 다르면 `403`.
   2. `expires`가 지났으면 `410`.
   3. 둘 다 통과해야 캐시를 본다. 캐시 HIT여도 서명이 틀리면 받을 수 없다.
   - OTA 서버나 DB에 묻지 않고 비밀 값과 계산만으로 끝난다. 서버가 잠깐 죽어도 이미 발급된 URL로는 다운로드된다.
   - 만료는 요청을 시작할 때만 본다. 받는 도중 만료돼도 끊기지 않고, 만료 뒤의 이어받기(Range) 요청은 `410`이다.
-  - 차량이 누구인지, 파일 내용이 맞는지는 보지 않는다. 파일 무결성은 차량이 SHA-256으로 확인한다(⑦).
+  - 차량이 누구인지, 파일 내용이 맞는지는 보지 않는다. 파일 무결성과 진위는 차량이 SHA-256과 **[Phase2]** 펌웨어 서명으로 확인한다(⑦).
 
 ```nginx
 location /firmware/ {
@@ -317,9 +386,28 @@ location /firmware/ {
 
 ### ⑦ 검증 · 설치 (차량)
 
-1. 받은 크기 == `fileSize`, SHA-256 == `sha256`.
-2. 실패하면 재시도하거나 매니페스트를 다시 요청. 계속 실패하면 업데이트 실패.
-3. 설치 → 결과를 다음 체크인의 `lastUpdate`로 보고 (④로 돌아감).
+1. 받은 크기 == `fileSize`, SHA-256 == `sha256`. 실패하면 재시도하거나 매니페스트를 다시 요청하고, 계속 실패하면 `DOWNLOAD_FAILED` / `HASH_MISMATCH`.
+2. **[Phase2] 펌웨어 서명 검증**
+   1. 서명 문자열을 직접 확인한 값으로 다시 만든다 (§0 펌웨어 서명). 매니페스트 값을 그대로 쓰지 않는다.
+
+      | 항목 | 차량이 쓰는 값 |
+      |---|---|
+      | `model` | 자기 차종 (등록 때 보낸 값) |
+      | `version` | 매니페스트의 `targetVersion` |
+      | `sha256` | 받은 파일로 직접 계산한 값 |
+      | `fileSize` | 실제로 받은 크기 |
+
+   2. `keyId`로 바이너리에 포함된 공개 키를 고른다. 모르는 `keyId`면 실패.
+   3. Ed25519로 검증한다. 실패하면 설치하지 않고 `SIGNATURE_INVALID` (재시도·재요청하지 않음).
+3. **[Phase2] 다운그레이드 거부** — `targetVersion`과 현재 버전을 서버의 버전 비교 규칙(점으로 나눈 숫자 비교, `1.0` == `1.0.0`, VEHICLE-POL-001)과 같은 규칙으로 비교한다.
+   - 높으면 설치한다.
+   - 같으면 설치하지 않고 결과도 보고하지 않는다 (이미 설치된 상태).
+   - 낮거나 버전을 읽을 수 없으면 설치하지 않고 `DOWNGRADE_REJECTED`.
+   - 문제 있는 릴리스를 되돌릴 때는 이전 내용을 더 높은 버전으로 새로 등록·서명해 배포한다 (roll-forward, 예: `1.1.0` 문제 → `1.0.0` 내용을 `1.1.1`로).
+4. 설치 → 결과를 다음 체크인의 `lastUpdate`로 보고 (④로 돌아감).
+
+- 검증은 공개 키와 계산만으로 끝난다. 서버나 네트워크에 묻지 않는다.
+- 설치 중 실패 시 이전 상태로 돌아가는 것(A/B 파티션 등)은 차량 내부 동작이며 다운그레이드 거부와 별개다.
 
 ### ⑧ 대시보드 (프론트엔드)
 
@@ -348,11 +436,12 @@ stateDiagram-v2
     매니페스트 --> 체크인: 404 / 409 / 410 / 503 NO_AVAILABLE_EDGE
     다운로드 --> 다운로드: Edge 장애 → 다음 fallbackUrl
     다운로드 --> 매니페스트: 모든 Edge 실패 (1회)
-    다운로드 --> 매니페스트: 403 서명 불일치 / 410 만료 (1회)
+    다운로드 --> 매니페스트: 403 URL 서명 불일치 / 410 만료 (1회)
     다운로드 --> 검증: 200
     다운로드 --> 결과보고대기: 404 / 재시도 초과 (DOWNLOAD_FAILED)
-    검증 --> 설치: 크기·해시 OK
-    검증 --> 결과보고대기: HASH_MISMATCH
+    검증 --> 설치: 크기·해시·펌웨어 서명 OK, 버전 상승
+    검증 --> 결과보고대기: HASH_MISMATCH / SIGNATURE_INVALID / DOWNGRADE_REJECTED
+    검증 --> 체크인: 같은 버전 (보고 없음)
     설치 --> 결과보고대기: SUCCEEDED / INSTALL_FAILED
     결과보고대기 --> 체크인: 다음 체크인에 lastUpdate(edgeId 포함)
 ```
@@ -374,7 +463,9 @@ stateDiagram-v2
 |---|---|
 | `vehicle_state` | `latitude DECIMAL(9,6)`, `longitude DECIMAL(9,6)`, `location_updated_at`, `assigned_edge_id VARCHAR`(NULL 허용) 추가 |
 | `update_result` | `edge_id VARCHAR`(NULL 허용) 추가 |
+| `artifact` | `signature VARCHAR`(base64, NOT NULL), `key_id VARCHAR`(NOT NULL) 추가 |
 
+- `artifact.signature`는 필수다. 서명 없는 파일을 허용하는 예외 경로를 두지 않는다. Phase2 RDS는 새로 시작하므로 기존 파일은 서명해서 다시 등록한다.
 - Edge는 DB에 없으므로 `assigned_edge_id`, `edge_id`는 FK 없이 설정의 Edge `id` 문자열을 그대로 저장한다. 설정에서 Edge가 빠져도 과거 기록은 남는다.
 
 - 매니페스트가 `vehicle_state`에 쓰게 되므로 체크인과 같은 행을 갱신한다. 둘 다 한 행 덮어쓰기라 잠금 시간은 짧다.
@@ -388,12 +479,16 @@ stateDiagram-v2
 | 차량 (그 외) | `Bearer {vehicle-token}`, 토큰 차량 ≠ 경로 `vehicleId`면 `403` |
 | 관리자 / 프론트엔드 | `Bearer {admin-token}` |
 | SSE | `Bearer {admin-token}`, fetch 기반 SSE |
-| 차량 → CDN Edge | **[Phase2]** 서명 URL (`md5`, `expires`). OTA 서버가 발급하고 Edge가 nginx `secure_link`로 검증. 모든 Edge와 OTA 서버가 같은 비밀 값을 쓰며, 비밀 값은 Vault → k8s Secret으로 주입 (ConfigMap에 두지 않음) |
+| 관리자 → Vault | **[Phase2]** 팀원 개인 계정(정책 `firmware-signer`, `transit/sign/firmware-signing`만 허용). 짧은 TTL 토큰. 관리자 토큰과 같은 곳에 저장하지 않음 |
+| 펌웨어 진위 | **[Phase2]** 펌웨어 서명 (Ed25519). 서버는 등록 때, 차량은 설치 전에 공개 키로 검증 (§0 펌웨어 서명) |
+| 차량 → CDN Edge | **[Phase2]** URL 서명 (`md5`, `expires`). OTA 서버가 발급하고 Edge가 nginx `secure_link`로 검증. 모든 Edge와 OTA 서버가 같은 비밀 값을 쓰며, 비밀 값은 Vault → k8s Secret으로 주입 (ConfigMap에 두지 않음) |
 | OTA 서버 → S3 | IAM 자격 증명 (`s3:PutObject`, 해당 버킷의 `firmware/*`만) |
 | Edge → S3 | 자격 증명 없음. 버킷 정책 `aws:SourceIp`로 Edge 출구 IP만 `s3:GetObject` 허용 |
 | OTA 서버 → RDS | DB 사용자·비밀번호. RDS 보안 그룹에서 서버 출구 IP만 3306 허용 |
 
-## 6. 용어 구분: `region`과 `location`
+## 6. 용어 구분
+
+### `region`과 `location`
 
 | | `region` | `location` |
 |---|---|---|
@@ -401,6 +496,18 @@ stateDiagram-v2
 | 받는 때 | 등록 때 한 번 | 체크인마다 |
 | 저장 | `vehicle.region` | `vehicle_state.latitude/longitude` |
 | 쓰는 곳 | 캠페인 대상 판정 | Edge 선택 |
+
+### [Phase2] URL 서명과 펌웨어 서명
+
+| | URL 서명 | 펌웨어 서명 |
+|---|---|---|
+| 목적 | 이 다운로드를 OTA 서버가 허락했는지 | 이 파일을 정당한 발행자가 만들었는지 |
+| 값 | `md5`, `expires` (쿼리스트링) | `signature`, `keyId` (매니페스트) |
+| 만드는 주체 | OTA 서버 | 팀원 (Vault) |
+| 만드는 때 | 매니페스트 요청마다 | 파일 등록 전 한 번 |
+| 만료 | `signed-url-ttl` (1시간) | 없음 (공개 키가 있는 동안 유효) |
+| 비밀 값 | 공유 비밀 값 (서버·Edge 동일) | 개인 키(Vault) / 공개 키(서버·차량) |
+| 검증 | CDN Edge (nginx `secure_link`) | OTA 서버(등록 시), 차량(설치 전) |
 
 ## 7. 협의 필요 항목
 
@@ -414,6 +521,7 @@ stateDiagram-v2
 | `default-edge-id` | `edge-seoul` |
 | 거리 계산 방식 | Haversine. 도로 거리·네트워크 지연은 보지 않는다 |
 | Edge 부하 고려 여부 | Phase2는 거리만 본다. 한 Edge 몰림은 Edge replica·HPA로 대응 |
-| 서명 URL 유효 기간 (`signed-url-ttl`) | 1시간. 재시도와 fallback까지 포함해 다운로드가 끝날 시간보다 길게 |
-| 서명 비밀 값 교체 | 교체하는 동안 Edge가 이전 값과 새 값을 모두 허용하고, 서버를 새 값으로 바꾼 뒤 이전 값을 뺀다. 구체 절차는 협의 |
-| Ed25519 파일 서명 | 미룬 항목. 파일 무결성은 매니페스트의 SHA-256으로 확인한다 |
+| URL 서명 유효 기간 (`signed-url-ttl`) | 1시간. 재시도와 fallback까지 포함해 다운로드가 끝날 시간보다 길게 |
+| URL 서명 비밀 값 교체 | 교체하는 동안 Edge가 이전 값과 새 값을 모두 허용하고, 서버를 새 값으로 바꾼 뒤 이전 값을 뺀다. 구체 절차는 협의 |
+| 펌웨어 서명 권한 범위 | 팀원 전원 (개인 Vault 계정). 실제 운영이라면 소수로 제한하고 등록 권한과 분리 |
+| 서명·업로드 스크립트 위치 | orbit-server 레포 `scripts/` (등록 API와 형식을 함께 관리) |
