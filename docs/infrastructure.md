@@ -119,7 +119,7 @@ AWS (관리형): S3 (펌웨어 Origin), RDS (DB) — flow.md 기준, §5 참고
 
 | 호스트 | 기종 | CPU | RAM | 저장장치 |
 |---|---|---|---|---|
-| `io` | 홈서버 | i5-10400 (6C/12T) | 32 GB | 500 GB (RTX 3060) |
+| `io` | 홈서버 | i5-10400 (6C/12T) | 32 GB | 500 GB (RTX 3060 SUPER) |
 
 ## 7. 네트워크
 
@@ -139,7 +139,13 @@ AWS (관리형): S3 (펌웨어 Origin), RDS (DB) — flow.md 기준, §5 참고
 | `lgtm` | `10.0.0.206` | - | - |
 | `wazuh` | `10.0.0.207` | - | - |
 
-- 원격 접속은 tailscale을 쓴다. tailscale 주소는 저장소에 두지 않고 Notion에서 확인한다.
+- 팀원 원격 접속: Tailscale에 연결한 뒤 `<이름>.orbit-labs.space` 또는 내부망 주소로 접속한다. 예: `ssh <GitHub 아이디>@sol.orbit-labs.space`
+- 경로는 팀원 기기 → Tailscale → astra(subnet router, 전달만 함) → 내부망이다. astra 계정은 필요 없다.
+- `<이름>.orbit-labs.space`는 Cloudflare DNS에 내부망 주소로 등록된 이름이다 (DNS only). Cloudflare는 이름을 주소로 알려 주기만 하고 접속은 Cloudflare를 거치지 않는다.
+- Vault는 `https://10.0.0.201:8200`이다.
+- 노드의 Tailscale 이름(`<이름>-ts`)은 astra 장애 때 관리자가 쓰는 예비 접속이다. 팀원은 Tailscale 정책으로 막혀 있으므로 쓰지 않는다. 주소는 저장소에 두지 않는다.
+
+웹 서비스 이름(`grafana`, `kibana`, `hubble`, `campaign`, `ota`.orbit-labs.space)은 이 경로가 아니다. Cloudflare 프록시와 astra nginx를 거치는 공개 경로이며 Tailscale 없이 브라우저로 접속한다 (5. nginx 참고).
 
 ## 8. 운영체제
 
