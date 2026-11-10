@@ -3,7 +3,7 @@
 - 근거: [flow.md](flow.md) (Phase2, 펌웨어 서명은 #63), Notion `API 설계` 데이터베이스
 - 상태: 설계중 (v2)
 - 작성일: 2026-10-10
-- 수정일: 2026-11-02
+- 수정일: 2026-11-11 (버전 형식 오류, #77)
 - 구현 추적: [orbit-server#25](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/25)
 
 orbit-server가 구현할 API를 한 곳에 모은 목록이다. API별 요청·응답 형식은 [api-spec.md](api-spec.md)에, 처리 순서는 flow.md의 각 단계에 있다.
@@ -80,12 +80,12 @@ API 경로와 인증은 그대로이고 요청·응답 필드만 바뀐다. 상�
 
 | API | 오류 | 요구사항 |
 |---|---|---|
-| Origin 파일 등록 | `409 ARTIFACT_VERSION_EXISTS`, `422 HASH_MISMATCH`, `422 SIGNATURE_INVALID` (**[Phase2]** 서명·`keyId` 누락, 모르는 `keyId`, 검증 실패), `502 ORIGIN_UPLOAD_FAILED` | ORIGIN-REQ-001 / ORIGIN-POL-001 |
+| Origin 파일 등록 | `400 INVALID_INPUT` (버전 형식 오류 등), `409 ARTIFACT_VERSION_EXISTS` (비교 규칙상 같은 버전 포함), `422 HASH_MISMATCH`, `422 SIGNATURE_INVALID` (**[Phase2]** 서명·`keyId` 누락, 모르는 `keyId`, 검증 실패), `502 ORIGIN_UPLOAD_FAILED` | ORIGIN-REQ-001 / ORIGIN-POL-001 |
 | Origin 파일 목록 | - | ORIGIN-REQ-001 |
-| 캠페인 등록 | `400 INVALID_INPUT`, `404 ARTIFACT_NOT_FOUND`, `409 ACTIVE_CAMPAIGN_EXISTS` | CAMPAIGN-REQ-001 / CAMPAIGN-POL-001 |
-| 차량 등록 · 토큰 발급 | `401 INVALID_ENROLLMENT_KEY` | VEHICLE-REQ-002 / VEHICLE-POL-003 |
-| 체크인 · 대상 판정 · 결과 보고 | `400 INVALID_INPUT` (**[Phase2]** 좌표 범위 오류), `401 UNAUTHORIZED`, `403 VEHICLE_MISMATCH` | VEHICLE-REQ-001, UPDATE-REQ-001 / VEHICLE-POL-001, VEHICLE-POL-002, UPDATE-POL-001 |
-| 매니페스트 요청 | `404 CAMPAIGN_NOT_FOUND`, `409 NOT_UPDATE_TARGET`, `410 CAMPAIGN_INACTIVE`, `503 NO_AVAILABLE_EDGE` (**[Phase2]** 정상 Edge 없음) | MANIFEST-REQ-001 / MANIFEST-POL-001, DOWNLOAD-REQ-001 / DOWNLOAD-POL-001 |
+| 캠페인 등록 | `400 INVALID_INPUT` (버전 형식 오류 포함), `404 ARTIFACT_NOT_FOUND`, `409 ACTIVE_CAMPAIGN_EXISTS` | CAMPAIGN-REQ-001 / CAMPAIGN-POL-001 |
+| 차량 등록 · 토큰 발급 | `400 INVALID_INPUT` (`currentVersion` 형식 오류 등), `401 INVALID_ENROLLMENT_KEY` | VEHICLE-REQ-002 / VEHICLE-POL-003 |
+| 체크인 · 대상 판정 · 결과 보고 | `400 INVALID_INPUT` (`currentVersion` 형식 오류, **[Phase2]** 좌표 범위 오류), `401 UNAUTHORIZED`, `403 VEHICLE_MISMATCH` | VEHICLE-REQ-001, UPDATE-REQ-001 / VEHICLE-POL-001, VEHICLE-POL-002, UPDATE-POL-001 |
+| 매니페스트 요청 | `404 CAMPAIGN_NOT_FOUND`, `409 NOT_UPDATE_TARGET` (현재 버전이 목표 버전 이상 포함), `410 CAMPAIGN_INACTIVE`, `503 NO_AVAILABLE_EDGE` (**[Phase2]** 정상 Edge 없음) | MANIFEST-REQ-001 / MANIFEST-POL-001, DOWNLOAD-REQ-001 / DOWNLOAD-POL-001 |
 | 차량 상태 스냅샷 | - | MONITORING-REQ-004 / MONITORING-POL-001, MONITORING-POL-003 |
 | 차량 상태 스트림 (SSE) | `400 INVALID_INPUT` (형식이 틀린 `Last-Event-ID`) | MONITORING-REQ-001 / MONITORING-POL-001 |
 | **[Phase2]** CDN Edge 상태 | - | - |
