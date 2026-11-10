@@ -3,7 +3,7 @@
 - 근거: [flow.md](flow.md) (Phase2, 펌웨어 서명은 #63), Notion `API 설계` 데이터베이스
 - 상태: 설계중 (v2)
 - 작성일: 2026-10-10
-- 수정일: 2026-11-02
+- 수정일: 2026-11-11 (Phase2 서버 작업 진행 상태, #79)
 - 구현 추적: [orbit-server#25](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/25)
 
 orbit-server가 구현할 API를 한 곳에 모은 목록이다. API별 요청·응답 형식은 [api-spec.md](api-spec.md)에, 처리 순서는 flow.md의 각 단계에 있다.
@@ -38,6 +38,11 @@ OTA 흐름에 반드시 필요한 API. 표의 순서는 데이터가 생기는 �
   - Edge는 URL 서명 불일치면 `403`, 만료면 `410`을 준다. 서버 API 오류는 아니지만 차량이 매니페스트를 다시 요청하는 원인이 된다 (flow.md ⑥).
 - **[Phase2]** 펌웨어 서명(`signature`, `keyId`)은 관리자가 Vault로 등록 전에 만든다. OTA 서버는 서명하지 않고 등록 때 검증만 하며, 차량은 설치 전에 다시 검증한다 (flow.md §0 펌웨어 서명, ⑦).
 - 업데이트 결과 보고는 별도 API 없이 체크인의 `lastUpdate`로 받는다.
+- **[Phase2]** 진행 상황 (상태는 남은 작업이 있어 `Phase2 변경`으로 둔다)
+  - 체크인: `location` 저장, `lastUpdate.edgeId` 기록 완료 ([server#86](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/86)).
+  - 매니페스트: Edge 선택, `edge{edgeId, distanceKm}`, `fallbackUrls`, `assigned_edge_id` 기록, `503 NO_AVAILABLE_EDGE` 완료 ([server#87](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/87), [server PR #121](https://github.com/ORBIT-CLOUD-LABS/orbit-server/pull/121)). URL 서명(`md5`, `expires`, `urlExpiresAt`)은 [server#38](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/38), `signature`·`keyId`는 펌웨어 서명 검증 작업에서 남았다.
+  - 다운로드 URL은 Phase1의 고정 주소(`CDN_BASE_URL`, `orbit.cdn.base-url`)를 없애고 고른 Edge의 `base-url` + Origin 경로로 만든다.
+  - 차량 상태 스냅샷·스트림의 `location`, `assignedEdgeId`, `downloadedEdgeId`는 아직 응답하지 않는다 (차량 상세 §4는 응답한다).
 - CDN Edge 상태 응답: Edge별 `edgeId`, `name`, `latitude`, `longitude`, `healthy`(요청을 받은 Pod 기준), 배정 차량 수(`vehicle_state.assigned_edge_id` 기준), 캠페인별 다운로드 성공·실패 수(`update_result.edge_id` 기준).
 
 ### 공통 인증
@@ -55,11 +60,11 @@ API는 아니지만 위 API가 의존하므로 따로 구현한다.
 
 | 이름 | 내용 | 의존하는 API | 구현 Issue |
 |---|---|---|---|
-| Edge 목록 설정 | `orbit.cdn.edges` 로딩. `id` 중복, 좌표 범위, `default-edge-id` 누락이면 서버 기동 실패 (flow.md §0) | 매니페스트, CDN Edge 상태 | 생성 예정 |
-| Edge 헬스체크 | `{baseUrl}/healthz`를 10초마다 호출, 연속 3회 실패면 선택에서 제외, `orbit_cdn_edge_healthy{edge_id}` 메트릭 | 매니페스트, CDN Edge 상태 | 생성 예정 |
+| Edge 목록 설정 | `orbit.cdn.edges` 로딩. `id` 중복, 좌표 범위, `default-edge-id` 누락이면 서버 기동 실패 (flow.md §0) | 매니페스트, CDN Edge 상태 | [server#84](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/84) (완료) |
+| Edge 헬스체크 | `{baseUrl}/healthz`를 10초마다 호출, 연속 3회 실패면 선택에서 제외, `orbit_cdn_edge_healthy{edge_id}` 메트릭 | 매니페스트, CDN Edge 상태 | [server#85](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/85) (완료) |
 | URL 서명 발급 | `md5 = base64url(MD5("{expires}{path} {secret}"))`, 비밀 값은 Secret으로 주입 | 매니페스트 | [server#38](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/38) |
 | 펌웨어 서명 검증 | `orbit.signing.public-keys`(`keyId → 공개 키`) 로딩, 서명 문자열(`orbit-firmware-v1`, `model`, `version`, `sha256`, `fileSize`) 생성, Ed25519 검증 (flow.md §0) | Origin 파일 등록 | 생성 예정 |
-| DB 마이그레이션 | `vehicle_state`에 `latitude`, `longitude`, `location_updated_at`, `assigned_edge_id`, `update_result`에 `edge_id`, `artifact`에 `signature`, `key_id`(NOT NULL) 추가, 대시보드 조회 뷰 반영 (flow.md §4) | 체크인, 매니페스트, 대시보드, Origin 파일 등록 | 생성 예정 |
+| DB 마이그레이션 | `vehicle_state`에 `latitude`, `longitude`, `location_updated_at`, `assigned_edge_id`, `update_result`에 `edge_id`, `artifact`에 `signature`, `key_id`(NOT NULL) 추가, 대시보드 조회 뷰 반영 (flow.md §4) | 체크인, 매니페스트, 대시보드, Origin 파일 등록 | [server#92](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/92) (완료) |
 | Origin AWS S3 전환 | S3 업로드에 `ChecksumAlgorithm=SHA256`, 큰 파일은 multipart upload, 자격 증명은 Secret 또는 Vault | Origin 파일 등록 | 생성 예정 |
 | 서명·업로드 스크립트 | Vault 서명(`vault:v1:...` → `keyId`, `signature` 분리) 후 등록 API 호출. 관리자 토큰과 Vault 인증은 실행 시 따로 입력 (위치는 flow.md §7 협의) | Origin 파일 등록 | 생성 예정 |
 
