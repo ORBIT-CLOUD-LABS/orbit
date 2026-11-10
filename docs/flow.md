@@ -2,7 +2,7 @@
 
 - 상태: 설계중 (v2)
 - 작성일: 2026-10-28
-- 수정일: 2026-11-02 (펌웨어 서명 추가, #63)
+- 수정일: 2026-11-11 (버전 형식·비교 규칙, #77)
 - 핵심: **CDN Edge를 여러 개 두고, 차량 위치에서 가장 가까운 Edge에서 업데이트 파일을 받는다. 차량은 설치 전에 펌웨어 서명으로 파일의 진위를 확인한다.** 새로 추가되거나 바뀐 곳은 `[Phase2]`로 표시했다.
 
 ## 0. 등장 주체
@@ -109,7 +109,7 @@ orbit-firmware-v1
 ```
 
 - 다섯 줄을 `\n`으로 잇고 끝에 줄바꿈을 붙이지 않는다. `sha256`은 소문자 hex 64자, `fileSize`는 10진수 바이트.
-- `version`은 등록한 문자열 그대로 쓴다 (`1.0`과 `1.0.0`은 다른 서명).
+- `version`은 등록한 문자열 그대로 쓴다 (`1.0`과 `1.0.0`은 다른 서명). 둘은 비교 규칙상 같은 버전이라 한 차종에 함께 등록할 수 없다 (① 2).
 - 첫 줄 `orbit-firmware-v1`은 용도·형식 구분용이다. 형식을 바꾸면 `v2`로 올린다.
 
 **서명 절차** (관리자, ① 등록 전)
@@ -200,7 +200,7 @@ sequenceDiagram
 **[Phase2]** 저장 위치가 S3로 바뀌고 펌웨어 서명을 함께 받는다. `POST /api/v1/admin/artifacts` · `multipart/form-data` · `Bearer {admin-token}`
 
 1. 관리자가 `file`, `model`, `version`, (선택) `sha256`, **[Phase2]** `signature`, `keyId`를 올린다. 서명은 등록 전에 만든다 (§0 펌웨어 서명).
-2. 같은 `model + version`이 있으면 `409 ARTIFACT_VERSION_EXISTS` (S3에 올리기 전에 확인).
+2. `version`이 점으로 나눈 숫자 형식(예: `1.0.1`)이 아니면 `400 INVALID_INPUT`. 같은 `model`에 비교 규칙상 같은 버전(`1.0` == `1.0.0`)이 있으면 `409 ARTIFACT_VERSION_EXISTS` (S3에 올리기 전에 확인).
 3. OTA 서버가 SHA-256을 계산한다. 요청에 `sha256`이 있으면 비교한다 → 다르면 `422 HASH_MISMATCH`.
 4. **[Phase2]** 서명 문자열(`model`, `version`, 계산한 `sha256`, 파일 크기)을 만들고 `keyId`의 공개 키로 검증한다. `signature`·`keyId`가 없거나, 모르는 `keyId`이거나, 검증에 실패하면 `422 SIGNATURE_INVALID` (S3에 올리기 전에 확인).
 5. **[Phase2]** S3에 `firmware/{model}/{version}/firmware.bin` 키로 올린다.
@@ -223,7 +223,7 @@ sequenceDiagram
 요청: `name`, `artifactId`, `targetVersion`, `target{model, hwVersions[], regions[], currentVersionMin, currentVersionMax}`, `startAt`, `endAt`
 
 1. `artifactId`의 파일이 없으면 `404 ARTIFACT_NOT_FOUND`.
-2. `target.model == artifact.model`, `targetVersion == artifact.version`, `startAt < endAt` → 아니면 `400 INVALID_INPUT`.
+2. `targetVersion`·`currentVersionMin`·`currentVersionMax`가 점으로 나눈 숫자 형식인지 먼저 확인한다 (`currentVersionMin/Max`는 생략하거나 비우면 제한 없음). 그다음 `target.model == artifact.model`, 비교 규칙상 `targetVersion == artifact.version`(`1.1.0.0` ↔ 파일 `1.1.0` 가능), `startAt < endAt` → 아니면 `400 INVALID_INPUT`.
 3. 같은 대상 조건 + 목표 버전의 활성 캠페인이 있으면 `409 ACTIVE_CAMPAIGN_EXISTS`.
 4. 등록 즉시 `ACTIVE` → 바로 체크인 대상 판정에 반영된다.
 
@@ -239,6 +239,7 @@ sequenceDiagram
 2. `vehicle`을 만들거나 갱신(처음 `201`, 재등록 `200`), `vehicle_state.current_version` 갱신.
 3. 기존 토큰을 `REVOKED`로 바꾸고 새 토큰을 발급한다. 토큰은 SHA-256 해시로만 저장하고 원문은 이 응답에서 한 번만 내려준다.
 
+- `currentVersion`이 점으로 나눈 숫자 형식이 아니면 `400 INVALID_INPUT`. 저장은 입력한 표기 그대로 한다.
 - 위치는 등록 때 받지 않는다. 차량은 움직이므로 체크인마다 받는다.
 
 ### ④ 체크인 · 대상 판정 · 결과 보고 (차량, 주기적)
@@ -268,6 +269,8 @@ sequenceDiagram
 3. **[Phase2]** `location`이 있으면 `vehicle_state`의 `latitude`, `longitude`, `location_updated_at`을 덮어쓴다. 없으면(GPS 미수신) 이전 값을 그대로 둔다. 좌표 범위가 틀리면 `400 INVALID_INPUT`.
 4. `lastUpdate`가 있으면 `update_result`에 `(vehicle_id, campaign_id)` 기준으로 덮어쓴다(멱등). **[Phase2]** `edgeId`(실제로 받은 Edge)도 함께 저장한다.
 5. 대상 여부를 판정해 응답한다. 위치는 판정에 쓰지 않는다.
+   - 현재 버전이 목표 버전 **이상**이면(비교 규칙 기준) 대상이 아니다 (VEHICLE-POL-001). 차량이 `DOWNGRADE_REJECTED`로 거부할 파일을 체크인마다 내려줘 다운로드·실패 보고가 반복되지 않게 하기 위해서다.
+   - `currentVersion`이 점으로 나눈 숫자 형식이 아니면 `400 INVALID_INPUT`. 저장은 입력한 표기 그대로 한다.
 
 응답
 
