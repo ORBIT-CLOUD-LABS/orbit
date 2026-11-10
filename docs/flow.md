@@ -2,7 +2,7 @@
 
 - 상태: 설계중 (v2)
 - 작성일: 2026-10-28
-- 수정일: 2026-11-02 (펌웨어 서명 추가, #63)
+- 수정일: 2026-11-11 (location-max-age 서버 기본값, #79)
 - 핵심: **CDN Edge를 여러 개 두고, 차량 위치에서 가장 가까운 Edge에서 업데이트 파일을 받는다. 차량은 설치 전에 펌웨어 서명으로 파일의 진위를 확인한다.** 새로 추가되거나 바뀐 곳은 `[Phase2]`로 표시했다.
 
 ## 0. 등장 주체
@@ -43,7 +43,7 @@ orbit:
   cdn:
     default-edge-id: edge-seoul      # 위치를 모를 때 쓰는 Edge
     fallback-count: 2                # fallbackUrls 개수
-    location-max-age: 10m            # 이보다 오래된 위치는 쓰지 않음
+    location-max-age: 30m            # 이보다 오래된 위치는 쓰지 않음 (서버 기본값)
     signed-url-ttl: 1h               # URL 서명 유효 기간 (URL 서명 비밀 값은 ConfigMap이 아닌 Secret, §5)
     edges:
       - id: edge-seoul
@@ -517,7 +517,7 @@ stateDiagram-v2
 | Edge 개수·이름·대표 좌표 | 서울·대전·부산 3개 (제안). 확정하면 §0 설정 예시와 orbit-gitops를 함께 고친다 |
 | 헬스체크 주기·실패 기준 | 10초, 연속 3회 실패 |
 | `fallback-count` | 2 |
-| `location-max-age` | 10분 |
+| `location-max-age` | 30분 (서버 기본값, `CDN_LOCATION_MAX_AGE`로 바꿀 수 있다. [server PR #121](https://github.com/ORBIT-CLOUD-LABS/orbit-server/pull/121)) |
 | `default-edge-id` | `edge-seoul` |
 | 거리 계산 방식 | Haversine. 도로 거리·네트워크 지연은 보지 않는다 |
 | Edge 부하 고려 여부 | Phase2는 거리만 본다. 한 Edge 몰림은 Edge replica·HPA로 대응 |
