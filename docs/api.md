@@ -3,7 +3,7 @@
 - 근거: [flow.md](flow.md) (Phase2, 펌웨어 서명은 #63), Notion `API 설계` 데이터베이스
 - 상태: 설계중 (v2)
 - 작성일: 2026-10-10
-- 수정일: 2026-11-02
+- 수정일: 2026-11-11 (보조 API 구현 반영, #78)
 - 구현 추적: [orbit-server#25](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/25)
 
 orbit-server가 구현할 API를 한 곳에 모은 목록이다. API별 요청·응답 형식은 [api-spec.md](api-spec.md)에, 처리 순서는 flow.md의 각 단계에 있다.
@@ -74,7 +74,7 @@ API 경로와 인증은 그대로이고 요청·응답 필드만 바뀐다. 상�
 | 체크인 | 요청에 `location{latitude, longitude}`(선택, 없으면 이전 값 유지), `lastUpdate.edgeId` 추가. `lastUpdate.failureReason`에 `SIGNATURE_INVALID`, `DOWNGRADE_REJECTED` 추가 | ④ |
 | 매니페스트 요청 | 응답에 `edge{edgeId, distanceKm}`, `fallbackUrls[{edgeId, url}]`, `urlExpiresAt`, `signature`, `keyId` 추가. `downloadUrl`은 가장 가까운 정상 Edge의 URL 서명이 붙은 URL. `vehicle_state.assigned_edge_id` 기록 | ⑤ |
 | 차량 상태 스냅샷 · 스트림 | 차량 필드에 `location{latitude, longitude, updatedAt}`, `assignedEdgeId`, `downloadedEdgeId` 추가 | ⑧ |
-| 차량 상세 (보조, §4) | 스냅샷과 같은 필드 추가 | ⑧ |
+| 차량 상세 (보조, §4) | `location`, `assignedEdgeId`, `lastUpdate.edgeId` 추가 (반영 완료, [server#23](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/23)) | ⑧ |
 
 ## 3. API별 오류 코드와 요구사항
 
@@ -92,17 +92,17 @@ API 경로와 인증은 그대로이고 요청·응답 필드만 바뀐다. 상�
 
 ## 4. 보조 API
 
-흐름을 돕는 API. Notion에 `[제안]`으로 등록되어 있으며 핵심 흐름 이후에 구현한다.
+흐름을 돕는 API. Notion에 `[제안]`으로 등록되어 있었고 핵심 흐름 이후에 구현했다. 요청·응답 형식은 [api-spec.md §4](api-spec.md#4-보조-api).
 
 | 이름 | Method | Endpoint | 설명 | 상태 | 구현 Issue |
 |---|---|---|---|---|---|
 | 캠페인 목록 | GET | `/api/v1/admin/campaigns` | 상태·차종 필터 | 완료 | [server#18](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/18) |
-| 캠페인 상세 | GET | `/api/v1/admin/campaigns/{campaignId}` | 대상 조건·기간·상태 | 미구현 | [server#19](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/19) |
-| 캠페인 비활성화 | PATCH | `/api/v1/admin/campaigns/{campaignId}` | ACTIVE → INACTIVE, 배포 중지 | 미구현 | [server#20](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/20) |
-| 캠페인 진행 현황 | GET | `/api/v1/admin/campaigns/{campaignId}/stats` | 대상·진행·성공·실패(사유별) 집계 | 미구현 | [server#21](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/21) |
+| 캠페인 상세 | GET | `/api/v1/admin/campaigns/{campaignId}` | 대상 조건·기간·상태 | 완료 | [server#19](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/19) |
+| 캠페인 비활성화 | PATCH | `/api/v1/admin/campaigns/{campaignId}` | ACTIVE → INACTIVE, 배포 중지. 재활성화 없음 | 완료 | [server#20](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/20) |
+| 캠페인 진행 현황 | GET | `/api/v1/admin/campaigns/{campaignId}/stats` | 대상·진행·성공·실패(사유별) 집계 | 완료 | [server#21](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/21) |
 | Origin 파일 상세 | GET | `/api/v1/admin/artifacts/{artifactId}` | 해시·경로, **[Phase2]** `keyId` | Phase2 변경 | [server#22](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/22) |
-| 차량 상세 | GET | `/api/v1/dashboard/vehicles/{vehicleId}` | 상세 + 마지막 업데이트 결과, **[Phase2]** 위치·배정 Edge·다운로드 Edge | 미구현 | [server#23](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/23) |
-| 차량 업데이트 이력 | GET | `/api/v1/dashboard/vehicles/{vehicleId}/events` | `vehicle_event` 테이블 필요 | 미구현 | [server#24](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/24) |
+| 차량 상세 | GET | `/api/v1/dashboard/vehicles/{vehicleId}` | 상세 + 마지막 업데이트 결과, **[Phase2]** 위치·배정 Edge·다운로드 Edge | 완료 | [server#23](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/23) |
+| 차량 업데이트 이력 | GET | `/api/v1/dashboard/vehicles/{vehicleId}/events` | 최근 50건. 결과 보고마다 `vehicle_event`에 기록 | 완료 | [server#24](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/24) |
 
 헬스체크(`GET /actuator/health`)는 orbit-server 기초 설정([server#5](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/5))에서 구성했으므로 이 목록에서 제외한다.
 
@@ -112,7 +112,7 @@ API 경로와 인증은 그대로이고 요청·응답 필드만 바뀐다. 상�
 |---|---|---|
 | Origin 파일 등록 | 버전·크기·해시·서명 저장 | 같음. 서명은 Ed25519 `signature`와 `keyId`로 나눠 저장하고, 서명 대상 형식은 flow.md §0 펌웨어 서명을 따른다 |
 | Origin 파일 상세 | 해시·서명·경로 | 해시·경로·`keyId`. `signature`는 저장만 하고 상세 응답에는 넣지 않는다 (매니페스트로만 내려준다) |
-| 차량 업데이트 이력 | `vehicle_event` 필요 | 현재 스키마에 `vehicle_event` 없음. 추가하려면 테이블 설계 결정 필요 |
+| 차량 업데이트 이력 | `vehicle_event` 필요 | `vehicle_event` 추가. 결과 보고마다 한 행 기록, 체크인은 기록하지 않음 ([server#24](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/24)) |
 
 Notion 쪽 설명도 flow.md에 맞춰 수정해야 한다.
 
@@ -122,7 +122,12 @@ Notion 쪽 설명도 flow.md에 맞춰 수정해야 한다.
 |---|---|---|
 | URL 서명 유효 기간, URL 서명 비밀 값 교체 절차 | 매니페스트 요청 | [server#38](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/38) |
 | 펌웨어 서명 권한 범위, 서명·업로드 스크립트 위치 | Origin 파일 등록 | 생성 예정 |
-| 캠페인 비활성화·수정 API 필요 여부 | 캠페인 비활성화 | [server#20](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/20) |
-| `vehicle_event` 테이블 설계 | 차량 업데이트 이력 | [server#24](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/24) |
+
+결정된 항목
+
+| 항목 | 결정 | 구현 Issue |
+|---|---|---|
+| 캠페인 비활성화·수정 API 필요 여부 | 비활성화만 둔다. 수정·재활성화는 하지 않고 새로 등록한다 | [server#20](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/20) |
+| `vehicle_event` 테이블 설계 | 결과 보고마다 한 행. `(vehicle_id, campaign_id, finished_at)` 중복은 한 번만 기록 | [server#24](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/24) |
 
 Edge 개수·좌표, 헬스체크 주기, `fallback-count`, `location-max-age` 등 Phase2 협의 항목은 [flow.md §7](flow.md#7-협의-필요-항목)을 따른다.
