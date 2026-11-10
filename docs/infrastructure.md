@@ -53,7 +53,9 @@ AWS (관리형): S3 (펌웨어 Origin), RDS (DB) — flow.md 기준, §5 참고
 | node-exporter | DaemonSet, 모든 노드 | 0.2 CPU / 128Mi (노드당) | 계획 |
 | Fluent Bit (수집) | DaemonSet, 모든 노드 | 0.1 CPU / 128Mi (노드당) | 계획 |
 | kube-state-metrics | 클러스터 | 0.2 CPU / 256Mi | 계획 |
+| 클러스터 입구 | 워커 3대 | - | 계획 (방식 미정: k3s Traefik 또는 Gateway API) |
 
+- 클러스터로 들어오는 웹 요청(Argo CD, Hubble, 이후 `ota`·`manager` 등)은 클러스터 입구 하나만 거친다. 서비스마다 NodePort를 열어 밖에서 직접 받지 않는다.
 - 앱 외 DaemonSet만 노드당 약 0.8 CPU / 768Mi를 쓴다. `polaris`(4코어, 8 GB)는 control plane 구성요소와 이 DaemonSet을 함께 버텨야 한다.
 
 ## 3. astra (게이트웨이·모니터링 호스트, 클러스터 밖)
@@ -82,12 +84,12 @@ AWS (관리형): S3 (펌웨어 Origin), RDS (DB) — flow.md 기준, §5 참고
 | VM | 서비스 | 권장 리소스 | 접근 주소 |
 |---|---|---|---|
 | `lgtm` | Prometheus | 2 CPU / 4Gi | `10.0.0.206` |
-| `lgtm` | Grafana | 1 CPU / 1Gi | `observe.orbit-labs.space` → `10.0.0.206:3000` |
+| `lgtm` | Grafana | 1 CPU / 1Gi | `grafana.orbit-labs.space` → `10.0.0.206:3000` (astra nginx, 내부 전용) |
 | `lgtm` | Alertmanager | 0.5 CPU / 256Mi | `10.0.0.206` |
 | `efk` | Elasticsearch | 2 CPU / 8Gi (힙은 절반) | `10.0.0.205` |
-| `efk` | Kibana | 1 CPU / 2Gi | `10.0.0.205` |
+| `efk` | Kibana | 1 CPU / 2Gi | `kibana.orbit-labs.space` → `10.0.0.205:5601` (astra nginx, 내부 전용) |
 | `efk` | Fluent Bit (수신) | 0.5 CPU / 512Mi | `10.0.0.205` |
-| `wazuh` | Wazuh 매니저, 인덱서, 대시보드 | 4 CPU / 8Gi (공식 최소) | `10.0.0.207` |
+| `wazuh` | Wazuh 매니저, 인덱서, 대시보드 | 4 CPU / 8Gi (공식 최소) | 대시보드 `wazuh-ui.orbit-labs.space` → `10.0.0.207:443` (astra nginx, 내부 전용) |
 
 - Wazuh agent는 모든 노드에 호스트 직접 설치한다 (계획).
 
@@ -108,10 +110,12 @@ AWS (관리형): S3 (펌웨어 Origin), RDS (DB) — flow.md 기준, §5 참고
 |---|---|
 | 배치 | astra 호스트 직접 |
 | 권장 리소스 | 0.5 CPU / 512Mi |
-| 접근 | `*.orbit-labs.space` |
-| 상태 | 계획 |
+| 접근 | 내부 입구: 서비스 이름 `wazuh-ui`, `kibana`, `grafana`.orbit-labs.space (팀원, Tailscale) |
+| 상태 | 내부 입구 적용 (orbit-infrastructure#34). 공개 입구는 계획 |
 
-- 외부에서 들어오는 요청을 클러스터 앱과 Grafana(`observe.orbit-labs.space`)로 넘기는 리버스 프록시다.
+- 내부 입구: `10.0.0.201:443`에서 서비스 이름을 보고 각 모니터링 VM 포트로 넘기는 리버스 프록시다. 모니터링 화면은 공개하지 않는다. 설정과 확인 방법은 `orbit-infrastructure` `docs/reverse-proxy.md`.
+- 공개 입구(계획): 클러스터 앱(`ota`, `manager`)만 Cloudflare를 거쳐 받는다. 내부 서비스 이름은 공개 입구에서 응답하지 않는다.
+- 클러스터로 보낼 때는 내부·공개 입구 모두 클러스터 입구 하나로만 넘긴다 (2절 "k8s 위에서 도는 것").
 - 펌웨어를 배포하는 CDN Edge nginx와는 다르다. Edge는 k8s 안의 Pod다 ([flow.md](flow.md) §0).
 - 같은 호스트에 NAT 게이트웨이(iptables)가 있다 (적용 완료).
 
@@ -139,13 +143,13 @@ AWS (관리형): S3 (펌웨어 Origin), RDS (DB) — flow.md 기준, §5 참고
 | `lgtm` | `10.0.0.206` | - | - |
 | `wazuh` | `10.0.0.207` | - | - |
 
-- 팀원 원격 접속: Tailscale에 연결한 뒤 `<이름>.orbit-labs.space` 또는 내부망 주소로 접속한다. 예: `ssh <GitHub 아이디>@sol.orbit-labs.space`
+- 팀원 원격 접속: Tailscale에 연결한 뒤 기기 이름 `<이름>.orbit-labs.space` 또는 내부망 주소로 SSH 접속한다. 예: `ssh <GitHub 아이디>@sol.orbit-labs.space`
 - 경로는 팀원 기기 → Tailscale → astra(subnet router, 전달만 함) → 내부망이다. astra 계정은 필요 없다.
 - `<이름>.orbit-labs.space`는 Cloudflare DNS에 내부망 주소로 등록된 이름이다 (DNS only). Cloudflare는 이름을 주소로 알려 주기만 하고 접속은 Cloudflare를 거치지 않는다.
 - Vault는 `https://10.0.0.201:8200`이다.
 - 노드의 Tailscale 이름(`<이름>-ts`)은 astra 장애 때 관리자가 쓰는 예비 접속이다. 팀원은 Tailscale 정책으로 막혀 있으므로 쓰지 않는다. 주소는 저장소에 두지 않는다.
 
-웹 서비스 이름(`grafana`, `kibana`, `hubble`, `campaign`, `ota`.orbit-labs.space)은 이 경로가 아니다. Cloudflare 프록시와 astra nginx를 거치는 공개 경로이며 Tailscale 없이 브라우저로 접속한다 (5. nginx 참고).
+모니터링 화면은 서비스 이름(`wazuh-ui`, `kibana`, `grafana`.orbit-labs.space)으로 접속한다. 서비스 이름은 Cloudflare DNS에 astra 주소(`10.0.0.201`, DNS only)로 등록되어 있고, astra nginx가 이름을 보고 각 VM 포트로 넘긴다 (5. nginx). 기기 이름은 SSH에, 서비스 이름은 화면에만 쓴다. Tailscale 정책에서 팀원의 443은 astra 하나만 열려 있어 VM 화면에 직접 접속할 수 없다. 공개 경로는 이후 클러스터 앱(`ota`, `manager`)만 둔다.
 
 ## 8. 운영체제
 
@@ -155,4 +159,3 @@ AWS (관리형): S3 (펌웨어 Origin), RDS (DB) — flow.md 기준, §5 참고
 | `astra` | Ubuntu 24.04.5 LTS | 6.8.0-147-generic | `orbit` |
 | `sol`, `terra`, `luna` | Ubuntu 24.04.5 LTS | 6.8.0-147-generic | `orbit` |
 | `efk`, `lgtm`, `wazuh` | Ubuntu 24.04 클라우드 이미지 (cloud-init) | - | `orbit` |
-
