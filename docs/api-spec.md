@@ -3,7 +3,7 @@
 - 근거: [flow.md](flow.md) (Phase2), [api.md](api.md) (API 목록·구현 상태), orbit-server `develop` 브랜치의 요청·응답 DTO, 공통 응답 형식([server#82](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/82), [server#83](https://github.com/ORBIT-CLOUD-LABS/orbit-server/pull/83))
 - 상태: 설계중 (v2)
 - 작성일: 2026-11-02
-- 수정일: 2026-11-03
+- 수정일: 2026-11-11 (매니페스트 구현 상태, #79)
 
 API별 요청·응답 형식을 정리한 문서다. API 목록과 구현 상태, 구현 Issue는 [api.md](api.md)에 둔다.
 
@@ -480,12 +480,15 @@ curl -X POST http://{ota-server}/api/v1/admin/artifacts \
 | `targetVersion` | string | 설치할 버전. 차량은 다운그레이드 판정과 서명 문자열에 쓴다 |
 | `fileSize` | number | 바이트 |
 | `sha256` | string | 소문자 hex 64자 |
-| **[Phase2]** `edge` | object | 고른 Edge. `edgeId`, `distanceKm`(위치를 모르면 `null`) |
+| **[Phase2]** `edge` | object | 고른 Edge. `edgeId`, `distanceKm`(km, 소수 첫째 자리. 위치가 없거나 오래돼 거리로 고르지 않았으면 `null`) |
 | `downloadUrl` | string | 가장 가까운 정상 Edge의 URL. **[Phase2]** URL 서명(`md5`, `expires`) 포함 |
 | **[Phase2]** `fallbackUrls` | object[] | 다음으로 가까운 정상 Edge들(최대 `fallback-count`). 없으면 빈 배열 |
 | **[Phase2]** `urlExpiresAt` | string | URL 서명 만료 시각. 지났으면 다운로드 전에 매니페스트를 다시 요청 |
 | **[Phase2]** `signature` | string | 펌웨어 서명 (base64, 64바이트). 요청마다 바뀌지 않는다 |
 | **[Phase2]** `keyId` | string | 서명 키 버전. 차량은 이 값으로 내장 공개 키를 고른다 |
+
+- 구현 상태: `edge`, `fallbackUrls`, Edge 선택은 구현했다 ([server#87](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/87)). URL 서명(`md5`, `expires`)과 `urlExpiresAt`([server#38](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/38)), `signature`·`keyId`(펌웨어 서명 검증)는 아직 응답하지 않는다.
+- `downloadUrl`, `fallbackUrls[].url`은 고른 Edge의 `base-url`(설정 `orbit.cdn.edges`) 뒤에 파일 경로를 붙여 만든다.
 
 오류 (판정 순서대로)
 
