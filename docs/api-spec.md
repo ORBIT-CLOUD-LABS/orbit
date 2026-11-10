@@ -729,7 +729,7 @@ data: [{"vehicleId":"VH-0001","model":"MODEL-A", ... }]
 - 알려진 제한: 같은 차량이 더 높은 버전의 다른 캠페인을 받는 경우에도 이 캠페인의 `inProgress`로 센다. 체크인 때 어느 캠페인을 내려줬는지 저장하지 않기 때문이다 ([server#21](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/21)).
 - 오류: `404 CAMPAIGN_NOT_FOUND`
 
-### 4.4 차량 상세 — **[제안]**, 미구현
+### 4.4 차량 상세
 
 `GET /api/v1/dashboard/vehicles/{vehicleId}` · admin-token · 성공 `200`
 
@@ -761,14 +761,64 @@ data: [{"vehicleId":"VH-0001","model":"MODEL-A", ... }]
 }
 ```
 
-- `data`는 차량 상태 객체에 `hwVersion`, `region`과 마지막 결과의 `failureDetail`, `finishedAt`을 더한다. 결과가 없으면 `lastUpdate`는 `null`.
-- 오류: `404` (code는 구현 Issue에서 정한다. 예: `VEHICLE_NOT_FOUND`)
+- `data`는 차량 정보(`hwVersion`, `region` 포함)와 현재 상태에 최근 업데이트 결과(`lastUpdate`)를 더한다. 차량 상태 객체의 `campaignId`, `lastResult`, `failureReason`, `downloadedEdgeId` 대신 `lastUpdate` 하나로 내려준다.
+- `lastUpdate`는 스냅샷·SSE와 같은 기준(가장 최근에 보고된 결과)으로 고른다. 결과가 없으면 `null`.
+- **[Phase2]** `location`(받은 적 없으면 `null`), `assignedEdgeId`(배정한 적 없으면 `null`), `lastUpdate.edgeId`(다운로드 전에 실패했으면 `null`)를 포함한다. 스냅샷·스트림에는 아직 이 필드가 없다.
+- 오류: `404 VEHICLE_NOT_FOUND`
+- 알려진 제한: 고정 경로 `/stream`이 먼저 매칭되므로 `vehicleId`가 `stream`인 차량은 조회할 수 없다.
 
-### 4.5 차량 업데이트 이력 — 미정
+### 4.5 차량 업데이트 이력
 
-`GET /api/v1/dashboard/vehicles/{vehicleId}/events` · admin-token
+`GET /api/v1/dashboard/vehicles/{vehicleId}/events` · admin-token · 성공 `200`
 
-- `vehicle_event` 테이블 설계가 정해지지 않아 형식을 두지 않는다 ([server#24](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/24)).
+```json
+{
+  "isSuccess": true,
+  "code": "OK",
+  "message": "요청에 성공했습니다.",
+  "data": {
+    "events": [
+      {
+        "campaignId": 7,
+        "version": "1.1.0",
+        "result": "SUCCEEDED",
+        "failureReason": null,
+        "failureDetail": null,
+        "edgeId": "edge-seoul",
+        "finishedAt": "2026-10-28T11:00:00Z"
+      },
+      {
+        "campaignId": 7,
+        "version": "1.1.0",
+        "result": "FAILED",
+        "failureReason": "DOWNLOAD_FAILED",
+        "failureDetail": "all edges failed",
+        "edgeId": null,
+        "finishedAt": "2026-10-28T10:00:00Z"
+      }
+    ]
+  },
+  "error": null
+}
+```
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `campaignId` | number | 업데이트를 배포한 캠페인 |
+| `version` | string | 캠페인이 배포한 파일의 버전 |
+| `result` | string | `SUCCEEDED` \| `FAILED` |
+| `failureReason` | string | 실패 사유 \| `null` |
+| `failureDetail` | string | 차량이 보낸 실패 상세 \| `null` |
+| **[Phase2]** `edgeId` | string | 실제로 파일을 받은 Edge. 다운로드 전에 실패했거나 Phase1 결과면 `null` |
+| `finishedAt` | string | 차량이 업데이트를 끝낸 시각 |
+
+- 최근 50건만 내려준다. 페이지네이션은 없다.
+- 정렬은 `finishedAt` 내림차순, 같으면 기록 순서(`id`) 내림차순이다.
+- 업데이트를 시도한 적 없으면 `events`는 빈 배열이다.
+- 결과 보고(체크인의 `lastUpdate`)마다 `vehicle_event`에 한 행씩 쌓는다. `update_result`는 캠페인당 한 행을 덮어써 재시도로 성공하면 실패 기록이 사라지므로 따로 남긴다. 체크인 자체는 기록하지 않는다.
+- 같은 시도를 다시 보내면(`vehicleId`, `campaignId`, `finishedAt`이 같으면) 한 번만 남긴다. `finishedAt`이 다른 재시도는 따로 남는다.
+- 이력은 이 API를 배포한 시점부터 쌓인다 ([server#24](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/24)).
+- 오류: `404 VEHICLE_NOT_FOUND`
 
 ## 5. 문서와 구현의 차이
 
