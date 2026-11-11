@@ -3,13 +3,13 @@
 - 근거: [flow.md](flow.md) (Phase2), [api.md](api.md) (API 목록·구현 상태), orbit-server `develop` 브랜치의 요청·응답 DTO, 공통 응답 형식([server#82](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/82), [server#83](https://github.com/ORBIT-CLOUD-LABS/orbit-server/pull/83))
 - 상태: 설계중 (v2)
 - 작성일: 2026-11-02
-- 수정일: 2026-11-03
+- 수정일: 2026-11-11 (보조 API 구현 반영, #78)
 
 API별 요청·응답 형식을 정리한 문서다. API 목록과 구현 상태, 구현 Issue는 [api.md](api.md)에 둔다.
 
 - Phase1에서 구현한 필드는 서버 코드 그대로 적었다. **[Phase2]** 표시는 아직 구현하지 않았거나 바뀌는 필드다.
 - 처리 순서와 이유는 flow.md의 각 단계(①~⑧)를 따른다. 이 문서와 flow.md가 다르면 flow.md가 기준이다.
-- 보조 API(§4) 중 미구현인 것은 **[제안]** 형식이다. 구현 Issue에서 확정한다.
+- 보조 API(§4)는 구현된 서버 응답 기준이다.
 
 ## 0. 공통 규칙
 
@@ -636,7 +636,7 @@ data: [{"vehicleId":"VH-0001","model":"MODEL-A", ... }]
 
 ## 4. 보조 API
 
-### 4.1 캠페인 상세 — **[제안]**, 미구현
+### 4.1 캠페인 상세
 
 `GET /api/v1/admin/campaigns/{campaignId}` · admin-token · 성공 `200`
 
@@ -667,9 +667,12 @@ data: [{"vehicleId":"VH-0001","model":"MODEL-A", ... }]
 ```
 
 - `data`는 등록 요청과 같은 모양에 `campaignId`, `status`, `createdAt`을 더한다.
-- 오류: `404 CAMPAIGN_NOT_FOUND`
+- `target.hwVersions`, `target.regions`는 이름순이다. 전체 대상이면 빈 배열이다.
+- `target.currentVersionMin`, `target.currentVersionMax`는 제한이 없으면 `null`이다.
+- 비활성(`INACTIVE`) 캠페인도 조회한다.
+- 오류: `404 CAMPAIGN_NOT_FOUND`, `400 INVALID_INPUT`(`campaignId`가 숫자가 아님)
 
-### 4.2 캠페인 비활성화 — **[제안]**, 미구현
+### 4.2 캠페인 비활성화
 
 `PATCH /api/v1/admin/campaigns/{campaignId}` · admin-token · 성공 `200`
 
@@ -679,11 +682,13 @@ data: [{"vehicleId":"VH-0001","model":"MODEL-A", ... }]
 { "status": "INACTIVE" }
 ```
 
-- 응답은 캠페인 상세와 같은 형식 (`data`에 캠페인 상세).
-- `INACTIVE → ACTIVE`를 허용할지는 [server#20](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/20)에서 정한다.
-- 오류: `400 INVALID_INPUT`(정의되지 않은 `status`), `404 CAMPAIGN_NOT_FOUND`
+- 응답은 캠페인 상세와 같은 형식 (`data`에 캠페인 상세, §4.1).
+- `ACTIVE → INACTIVE`만 다룬다. 비활성화한 캠페인은 체크인 대상 판정에서 빠지고, 매니페스트는 `410 CAMPAIGN_INACTIVE`로 응답한다.
+- 이미 `INACTIVE`면 그대로 두고 `200`으로 응답한다 (멱등).
+- 재활성화(`INACTIVE → ACTIVE`)와 캠페인 수정은 하지 않는다. 필요하면 비활성화한 뒤 새로 등록한다. 재활성화하려면 중복 활성 캠페인 확인(CAMPAIGN-POL-001)을 다시 거쳐야 하기 때문이다 ([server#20](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/20)).
+- 오류: `400 INVALID_INPUT`(`status`가 `INACTIVE`가 아님: `ACTIVE`, 정의되지 않은 값, 누락), `404 CAMPAIGN_NOT_FOUND`
 
-### 4.3 캠페인 진행 현황 — **[제안]**, 미구현
+### 4.3 캠페인 진행 현황
 
 `GET /api/v1/admin/campaigns/{campaignId}/stats` · admin-token · 성공 `200`
 
@@ -710,10 +715,21 @@ data: [{"vehicleId":"VH-0001","model":"MODEL-A", ... }]
 }
 ```
 
-- `inProgress` = `targetVehicles - succeeded - failed`. "진행 중"의 기준(대상 판정만 받은 차량 포함 여부)은 [server#21](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/21)에서 정한다.
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `campaignId` | number | 캠페인 ID |
+| `targetVehicles` | number | 대상 차량 수. `succeeded + failed + inProgress` |
+| `succeeded` | number | 이 캠페인에 성공을 보고한 차량 수 (`update_result` 기준) |
+| `failed` | number | 이 캠페인에 실패를 보고한 차량 수 |
+| `failureReasons` | object | 실패 사유별 차량 수. 보고된 적 없는 사유도 `0`으로 모두 담는다 |
+| `inProgress` | number | 이 캠페인에 결과를 보고하지 않았고, 대상 조건(차종·HW·지역·현재 버전 범위)에 맞으며, 현재 버전이 아직 목표 버전보다 낮은 차량 수 |
+
+- 비활성이거나 기간이 끝난 캠페인도 같은 기준으로 센다.
+- 성공한 차량은 현재 버전이 목표 버전으로 바뀌어 대상 조건을 벗어나므로, `targetVehicles`를 "지금 조건에 맞는 차량 수"로 세지 않고 위의 합으로 센다.
+- 알려진 제한: 같은 차량이 더 높은 버전의 다른 캠페인을 받는 경우에도 이 캠페인의 `inProgress`로 센다. 체크인 때 어느 캠페인을 내려줬는지 저장하지 않기 때문이다 ([server#21](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/21)).
 - 오류: `404 CAMPAIGN_NOT_FOUND`
 
-### 4.4 차량 상세 — **[제안]**, 미구현
+### 4.4 차량 상세
 
 `GET /api/v1/dashboard/vehicles/{vehicleId}` · admin-token · 성공 `200`
 
@@ -745,14 +761,64 @@ data: [{"vehicleId":"VH-0001","model":"MODEL-A", ... }]
 }
 ```
 
-- `data`는 차량 상태 객체에 `hwVersion`, `region`과 마지막 결과의 `failureDetail`, `finishedAt`을 더한다. 결과가 없으면 `lastUpdate`는 `null`.
-- 오류: `404` (code는 구현 Issue에서 정한다. 예: `VEHICLE_NOT_FOUND`)
+- `data`는 차량 정보(`hwVersion`, `region` 포함)와 현재 상태에 최근 업데이트 결과(`lastUpdate`)를 더한다. 차량 상태 객체의 `campaignId`, `lastResult`, `failureReason`, `downloadedEdgeId` 대신 `lastUpdate` 하나로 내려준다.
+- `lastUpdate`는 스냅샷·SSE와 같은 기준(가장 최근에 보고된 결과)으로 고른다. 결과가 없으면 `null`.
+- **[Phase2]** `location`(받은 적 없으면 `null`), `assignedEdgeId`(배정한 적 없으면 `null`), `lastUpdate.edgeId`(다운로드 전에 실패했으면 `null`)를 포함한다. 스냅샷·스트림에는 아직 이 필드가 없다.
+- 오류: `404 VEHICLE_NOT_FOUND`
+- 알려진 제한: 고정 경로 `/stream`이 먼저 매칭되므로 `vehicleId`가 `stream`인 차량은 조회할 수 없다.
 
-### 4.5 차량 업데이트 이력 — 미정
+### 4.5 차량 업데이트 이력
 
-`GET /api/v1/dashboard/vehicles/{vehicleId}/events` · admin-token
+`GET /api/v1/dashboard/vehicles/{vehicleId}/events` · admin-token · 성공 `200`
 
-- `vehicle_event` 테이블 설계가 정해지지 않아 형식을 두지 않는다 ([server#24](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/24)).
+```json
+{
+  "isSuccess": true,
+  "code": "OK",
+  "message": "요청에 성공했습니다.",
+  "data": {
+    "events": [
+      {
+        "campaignId": 7,
+        "version": "1.1.0",
+        "result": "SUCCEEDED",
+        "failureReason": null,
+        "failureDetail": null,
+        "edgeId": "edge-seoul",
+        "finishedAt": "2026-10-28T11:00:00Z"
+      },
+      {
+        "campaignId": 7,
+        "version": "1.1.0",
+        "result": "FAILED",
+        "failureReason": "DOWNLOAD_FAILED",
+        "failureDetail": "all edges failed",
+        "edgeId": null,
+        "finishedAt": "2026-10-28T10:00:00Z"
+      }
+    ]
+  },
+  "error": null
+}
+```
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `campaignId` | number | 업데이트를 배포한 캠페인 |
+| `version` | string | 캠페인이 배포한 파일의 버전 |
+| `result` | string | `SUCCEEDED` \| `FAILED` |
+| `failureReason` | string | 실패 사유 \| `null` |
+| `failureDetail` | string | 차량이 보낸 실패 상세 \| `null` |
+| **[Phase2]** `edgeId` | string | 실제로 파일을 받은 Edge. 다운로드 전에 실패했거나 Phase1 결과면 `null` |
+| `finishedAt` | string | 차량이 업데이트를 끝낸 시각 |
+
+- 최근 50건만 내려준다. 페이지네이션은 없다.
+- 정렬은 `finishedAt` 내림차순, 같으면 기록 순서(`id`) 내림차순이다.
+- 업데이트를 시도한 적 없으면 `events`는 빈 배열이다.
+- 결과 보고(체크인의 `lastUpdate`)마다 `vehicle_event`에 한 행씩 쌓는다. `update_result`는 캠페인당 한 행을 덮어써 재시도로 성공하면 실패 기록이 사라지므로 따로 남긴다. 체크인 자체는 기록하지 않는다.
+- 같은 시도를 다시 보내면(`vehicleId`, `campaignId`, `finishedAt`이 같으면) 한 번만 남긴다. `finishedAt`이 다른 재시도는 따로 남는다.
+- 이력은 이 API를 배포한 시점부터 쌓인다 ([server#24](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/24)).
+- 오류: `404 VEHICLE_NOT_FOUND`
 
 ## 5. 문서와 구현의 차이
 
