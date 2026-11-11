@@ -3,7 +3,7 @@
 - 근거: [flow.md](flow.md) (Phase2), [api.md](api.md) (API 목록·구현 상태), orbit-server `develop` 브랜치의 요청·응답 DTO, 공통 응답 형식([server#82](https://github.com/ORBIT-CLOUD-LABS/orbit-server/issues/82), [server#83](https://github.com/ORBIT-CLOUD-LABS/orbit-server/pull/83))
 - 상태: 설계중 (v2)
 - 작성일: 2026-11-02
-- 수정일: 2026-11-03
+- 수정일: 2026-11-11 (버전 형식·비교 규칙, #77)
 
 API별 요청·응답 형식을 정리한 문서다. API 목록과 구현 상태, 구현 Issue는 [api.md](api.md)에 둔다.
 
@@ -22,6 +22,7 @@ API별 요청·응답 형식을 정리한 문서다. API 목록과 구현 상태
 | 필드 이름 | camelCase |
 | 시각 | ISO-8601 UTC 문자열 (예: `2026-10-28T10:00:00Z`) |
 | ID | `artifactId`, `campaignId`는 숫자(Long). `vehicleId`는 차량이 정한 문자열 |
+| 버전 | 점으로 나눈 숫자만 받는다 (예: `1.0.1`). `v1.0`, `1.0.1-rc1`, `1..0`은 `400 INVALID_INPUT`. 비교는 자리별 숫자 비교이며 빈 자리는 0, 앞자리 0은 무시한다 (`1.0` == `1.0.0` == `01.0.0`). 저장·응답은 입력한 표기 그대로 |
 | 응답에서 빠지는 필드 | 값이 없으면 `null`. 예외는 각 API에 적었다 (예: 체크인 `campaignId`) |
 
 ### 인증 헤더
@@ -105,7 +106,7 @@ API별 요청·응답 형식을 정리한 문서다. API 목록과 구현 상태
 |---|---|---|---|
 | `file` | 파일 | O | 업데이트 파일 |
 | `model` | string | O | 차종. `/` 불가 |
-| `version` | string | O | 버전. `/` 불가. 등록한 문자열 그대로 서명 대상에 들어간다 |
+| `version` | string | O | 버전 (§0 버전 형식). 등록한 문자열 그대로 저장 경로와 서명 대상에 들어간다 |
 | `sha256` | string | X | 관리자가 계산한 SHA-256 (hex 64자, 대소문자 무관). 있으면 서버 계산값과 비교 |
 | **[Phase2]** `signature` | string | O | 펌웨어 서명 (base64, 64바이트). Vault 출력 `vault:v1:<base64>`의 `<base64>` 부분 |
 | **[Phase2]** `keyId` | string | O | 서명 키 버전 (예: `v1`). Vault 출력의 `v1` 부분 |
@@ -151,8 +152,8 @@ curl -X POST http://{ota-server}/api/v1/admin/artifacts \
 
 | HTTP | code | 상황 |
 |---|---|---|
-| 400 | `INVALID_INPUT` | `file`·`model`·`version` 누락, `sha256` 형식 오류, `model`·`version`에 `/` |
-| 409 | `ARTIFACT_VERSION_EXISTS` | 같은 `model + version`이 이미 있음 |
+| 400 | `INVALID_INPUT` | `file`·`model`·`version` 누락, `version` 형식 오류, `sha256` 형식 오류, `model`에 `/` |
+| 409 | `ARTIFACT_VERSION_EXISTS` | 같은 `model`에 비교 규칙상 같은 `version`이 이미 있음 (`1.0`이 있으면 `1.0.0`도 거부) |
 | 422 | `HASH_MISMATCH` | 요청 `sha256` ≠ 서버 계산값 |
 | 422 | **[Phase2]** `SIGNATURE_INVALID` | `signature`·`keyId` 누락, 모르는 `keyId`, 서명 검증 실패 |
 | 502 | `ORIGIN_UPLOAD_FAILED` | S3 업로드 실패·타임아웃 (재시도 가능) |
@@ -246,12 +247,12 @@ curl -X POST http://{ota-server}/api/v1/admin/artifacts \
 |---|---|---|---|
 | `name` | string | O | 캠페인 이름 |
 | `artifactId` | number | O | 배포할 파일 |
-| `targetVersion` | string | O | `artifact.version`과 같아야 함 |
+| `targetVersion` | string | O | 버전 (§0 버전 형식). 비교 규칙상 `artifact.version`과 같아야 함 (파일 `1.1.0`에 `1.1.0.0` 가능) |
 | `target.model` | string | O | `artifact.model`과 같아야 함 |
 | `target.hwVersions` | string[] | X | 없거나 비면 모든 HW 버전 |
 | `target.regions` | string[] | X | 배포 대상 지역(등록 속성). 차량 위치(좌표)와 다르다. 없거나 비면 모든 지역 |
-| `target.currentVersionMin` | string | X | 현재 버전 하한 |
-| `target.currentVersionMax` | string | X | 현재 버전 상한 |
+| `target.currentVersionMin` | string | X | 현재 버전 하한(포함). 버전 형식. 생략하거나 비우면 제한 없음 |
+| `target.currentVersionMax` | string | X | 현재 버전 상한(포함). 버전 형식. 생략하거나 비우면 제한 없음 |
 | `startAt`, `endAt` | string | O | 적용 기간. `startAt < endAt` |
 
 응답 `201`
@@ -270,7 +271,7 @@ curl -X POST http://{ota-server}/api/v1/admin/artifacts \
 
 | HTTP | code | 상황 |
 |---|---|---|
-| 400 | `INVALID_INPUT` | 필수 값 누락, `target.model ≠ artifact.model`, `targetVersion ≠ artifact.version`, `startAt ≥ endAt` |
+| 400 | `INVALID_INPUT` | 필수 값 누락, `targetVersion`·`target.currentVersionMin`·`target.currentVersionMax` 형식 오류, `target.model ≠ artifact.model`, 비교 규칙상 `targetVersion ≠ artifact.version`, `startAt ≥ endAt` |
 | 404 | `ARTIFACT_NOT_FOUND` | 없는 `artifactId` |
 | 409 | `ACTIVE_CAMPAIGN_EXISTS` | 같은 대상 조건 + 목표 버전의 활성 캠페인이 있음 |
 
@@ -332,7 +333,7 @@ curl -X POST http://{ota-server}/api/v1/admin/artifacts \
 | `model` | string | O | 차종. 차량이 펌웨어 서명을 검증할 때 이 값을 쓴다 (⑦) |
 | `hwVersion` | string | O | HW 버전 |
 | `region` | string | O | 판매·등록 지역 (예: `KR`). 위치(좌표)는 체크인 때 받는다 |
-| `currentVersion` | string | O | 현재 설치된 버전 |
+| `currentVersion` | string | O | 현재 설치된 버전 (§0 버전 형식) |
 
 응답 `201` / `200`
 
@@ -354,7 +355,7 @@ curl -X POST http://{ota-server}/api/v1/admin/artifacts \
 
 - `vehicleToken` 원문은 이 응답에서 한 번만 내려준다. 이전 토큰은 폐기된다.
 
-오류: `400 INVALID_INPUT`, `401 INVALID_ENROLLMENT_KEY` (차량은 재시도하지 않고 시작 실패로 종료)
+오류: `400 INVALID_INPUT` (필수 값 누락, `currentVersion` 형식 오류), `401 INVALID_ENROLLMENT_KEY` (차량은 재시도하지 않고 시작 실패로 종료)
 
 ### 2.2 체크인 · 대상 판정 · 결과 보고 (④)
 
@@ -379,7 +380,7 @@ curl -X POST http://{ota-server}/api/v1/admin/artifacts \
 
 | 필드 | 타입 | 필수 | 설명 |
 |---|---|---|---|
-| `currentVersion` | string | O | 현재 설치된 버전 |
+| `currentVersion` | string | O | 현재 설치된 버전 (§0 버전 형식) |
 | **[Phase2]** `location` | object | X | GPS 미수신이면 생략. 생략하면 서버는 이전 위치를 유지 |
 | **[Phase2]** `location.latitude` | number | O (`location`이 있으면) | `-90 ~ 90` |
 | **[Phase2]** `location.longitude` | number | O (`location`이 있으면) | `-180 ~ 180` |
@@ -431,13 +432,14 @@ curl -X POST http://{ota-server}/api/v1/admin/artifacts \
 
 - `lastUpdate`는 `(vehicleId, campaignId)` 기준으로 덮어쓴다(멱등). 같은 결과를 여러 번 보내도 된다.
 - `lastUpdate`의 형식이 틀리거나(값 누락, 정의되지 않은 enum, 시각 형식 오류) 없는 캠페인이면 서버는 그 보고만 버리고 로그를 남긴다. 체크인 자체는 `200`이다.
+- 현재 버전이 캠페인 목표 버전 이상이면(비교 규칙 기준) 대상이 아니다. 차량이 `DOWNGRADE_REJECTED`로 거부할 파일을 체크인마다 내려주지 않기 위해서다.
 - 위치는 대상 판정에 쓰지 않는다. 매니페스트의 Edge 선택에만 쓴다.
 
 오류
 
 | HTTP | code | 상황 | 차량 동작 |
 |---|---|---|---|
-| 400 | `INVALID_INPUT` | `currentVersion` 누락, **[Phase2]** 좌표 범위 오류 | 차량 버그. 로그 남기고 다음 주기 |
+| 400 | `INVALID_INPUT` | `currentVersion` 누락·형식 오류, **[Phase2]** 좌표 범위 오류 | 차량 버그. 로그 남기고 다음 주기 |
 | 401 | `UNAUTHORIZED` | 토큰 없음·폐기·틀림 | 등록부터 다시 |
 | 403 | `VEHICLE_MISMATCH` | 토큰 차량 ≠ 경로 `vehicleId` | 설정 오류. 재등록으로 해결되지 않음 |
 | 500 | `INTERNAL_SERVER_ERROR` | 서버 오류 | 다음 주기에 재시도 |
@@ -495,7 +497,7 @@ curl -X POST http://{ota-server}/api/v1/admin/artifacts \
 | 403 | `VEHICLE_MISMATCH` | 토큰 차량 ≠ 경로 `vehicleId` | 설정 오류 |
 | 404 | `CAMPAIGN_NOT_FOUND` | 없는 캠페인 | 체크인으로 돌아감 |
 | 410 | `CAMPAIGN_INACTIVE` | 비활성이거나 적용 기간이 아님 | 체크인으로 돌아감 |
-| 409 | `NOT_UPDATE_TARGET` | 이 차량이 대상이 아님 | 체크인으로 돌아감 |
+| 409 | `NOT_UPDATE_TARGET` | 이 차량이 대상이 아님 (현재 버전이 목표 버전 이상인 경우 포함) | 체크인으로 돌아감 |
 | 503 | **[Phase2]** `NO_AVAILABLE_EDGE` | 정상 Edge가 하나도 없음 | 다음 체크인에 다시 시도 |
 
 ### 2.4 업데이트 파일 다운로드 (⑥, OTA 서버 API 아님)
